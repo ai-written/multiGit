@@ -1,14 +1,14 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "gitdesk",
-  "outputfilename": "gitdesk",
+  "name": "depdash",
+  "outputfilename": "depdash",
   "iconfilename": "appicon.png",
   "frontend:install": "",
   "frontend:build": "",
   "frontend:dev:watcher": "",
   "frontend:dev:serverUrl": "",
   "author": {
-    "name": "GitDesk",
+    "name": "DepDash",
     "email": ""
   }
 }

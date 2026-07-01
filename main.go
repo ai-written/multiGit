@@ -16,7 +16,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:            "GitDesk",
+		Title:            "DepDash",
 		Width:            1100,
 		Height:           680,
 		MinWidth:         900,

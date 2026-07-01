@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"gitdesk/internal/command"
+	"depdash/internal/command"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

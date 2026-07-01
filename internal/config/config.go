@@ -33,7 +33,7 @@ func configDir() (string, error) {
 		}
 		appData = filepath.Join(home, ".config")
 	}
-	return filepath.Join(appData, "gitdesk"), nil
+	return filepath.Join(appData, "depdash"), nil
 }
 
 func configPath() (string, error) {

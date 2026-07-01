@@ -1,4 +1,4 @@
-# GitDesk
+# DepDash
 
 使用 Go + Wails v2 构建的桌面端批量 npm 依赖更新工具。
 
@@ -33,11 +33,11 @@ wails dev
 wails build
 ```
 
-构建产物位于 `build/bin/gitdesk.exe`。
+构建产物位于 `build/bin/depdash.exe`。
 
 ## 配置
 
-首次运行自动在 `%APPDATA%/gitdesk/config.json` 生成配置文件：
+首次运行自动在 `%APPDATA%/depdash/config.json` 生成配置文件：
 
 ```json
 {

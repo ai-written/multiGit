@@ -231,10 +231,10 @@ function applyTheme(dark) {
 themeBtn.addEventListener('click', () => {
     const next = !isDark();
     applyTheme(next);
-    localStorage.setItem('gitdesk-theme', next ? 'dark' : 'light');
+    localStorage.setItem('depdash-theme', next ? 'dark' : 'light');
 });
 
-const saved = localStorage.getItem('gitdesk-theme');
+const saved = localStorage.getItem('depdash-theme');
 applyTheme(saved === 'dark' || (saved === null && window.matchMedia('(prefers-color-scheme: dark)').matches));
 
 window.addEventListener('resize', updateMaximizeIcon);

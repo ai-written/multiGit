@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo   GitDesk - Wails Build Script
+echo   DepDash - Wails Build Script
 echo ========================================
 
 REM Generate ICO from appicon.png
@@ -37,5 +37,5 @@ if %errorlevel% neq 0 (
 
 echo [5/5] Build complete
 echo.
-echo Output: build\bin\gitdesk.exe
+echo Output: build\bin\depdash.exe
 echo ========================================

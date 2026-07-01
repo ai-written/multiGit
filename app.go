@@ -11,9 +11,9 @@ import (
 	"time"
 	"unsafe"
 
-	"gitdesk/internal/config"
-	"gitdesk/internal/git"
-	"gitdesk/internal/npm"
+	"depdash/internal/config"
+	"depdash/internal/git"
+	"depdash/internal/npm"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -66,7 +66,7 @@ func findICOIconResource(icoData []byte, targetSize int) *icoEntry {
 }
 
 func (a *App) getHWND() uintptr {
-	name, _ := syscall.UTF16PtrFromString("GitDesk")
+	name, _ := syscall.UTF16PtrFromString("DepDash")
 	hwnd, _, _ := procFindWindowW.Call(0, 0, uintptr(unsafe.Pointer(name)), 0)
 	return hwnd
 }
@@ -178,7 +178,7 @@ type UpdateResult struct {
 }
 
 func (a *App) UpdatePackage(dirList []string, packages []string, branch string) (UpdateResult, error) {
-	runtime.EventsEmit(a.ctx, "log", "GitDesk 批量依赖更新")
+	runtime.EventsEmit(a.ctx, "log", "DepDash 批量依赖更新")
 	runtime.EventsEmit(a.ctx, "log", "========================================")
 
 	cfg, err := config.Load()
