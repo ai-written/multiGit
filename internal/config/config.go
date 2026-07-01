@@ -12,6 +12,7 @@ type Config struct {
 	Packages         []string `json:"packages"`
 	AutoBumpProjects []string `json:"autoBumpProjects"`
 	RootPath         string   `json:"rootPath"`
+	UpdateRepo       string   `json:"updateRepo"`
 }
 
 func DefaultConfig() Config {
@@ -21,6 +22,7 @@ func DefaultConfig() Config {
 		Packages:         []string{},
 		AutoBumpProjects: []string{},
 		RootPath:         "",
+		UpdateRepo:       "ai-written/depdash",
 	}
 }
 

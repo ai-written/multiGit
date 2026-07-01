@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -318,4 +322,100 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+type UpdateInfo struct {
+	HasUpdate   bool   `json:"has_update"`
+	Latest      string `json:"latest"`
+	Current     string `json:"current"`
+	DownloadURL string `json:"download_url"`
+}
+
+func (a *App) CheckUpdate() UpdateInfo {
+	result := UpdateInfo{Current: version}
+
+	cfg, err := config.Load()
+	if err != nil || cfg.UpdateRepo == "" {
+		return result
+	}
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", cfg.UpdateRepo)
+	req, err := http.NewRequestWithContext(a.ctx, "GET", url, nil)
+	if err != nil {
+		return result
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return result
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return result
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		return result
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	if !isNewer(latest, version) {
+		return result
+	}
+
+	result.HasUpdate = true
+	result.Latest = release.TagName
+	if len(release.Assets) > 0 {
+		result.DownloadURL = release.Assets[0].BrowserDownloadURL
+	} else {
+		result.DownloadURL = release.HTMLURL
+	}
+	return result
+}
+
+func (a *App) OpenURL(url string) {
+	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+func isNewer(latest, current string) bool {
+	if current == "dev" {
+		return false
+	}
+	lp := parseVersion(latest)
+	cp := parseVersion(current)
+	for i := 0; i < 3; i++ {
+		if lp[i] > cp[i] {
+			return true
+		}
+		if lp[i] < cp[i] {
+			return false
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) [3]int {
+	var parts [3]int
+	for i, s := range strings.SplitN(v, ".", 3) {
+		n, _ := strconv.Atoi(s)
+		if i < 3 {
+			parts[i] = n
+		}
+	}
+	return parts
 }

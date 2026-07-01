@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -248,3 +248,18 @@ async function updateMaximizeIcon() {
 
 updateMaximizeIcon();
 loadAndApplyConfig();
+
+async function checkUpdate() {
+    try {
+        const info = await CheckUpdate();
+        if (info && info.has_update) {
+            const bar = $('#updateBar');
+            const text = $('#updateBarText');
+            text.textContent = `New version ${info.latest} (current ${info.current}) - click to download`;
+            bar.style.display = 'flex';
+            bar.onclick = () => { if (info.download_url) OpenURL(info.download_url); };
+            $('#updateBarClose').onclick = (e) => { e.stopPropagation(); bar.style.display = 'none'; };
+        }
+    } catch {}
+}
+checkUpdate();

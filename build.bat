@@ -29,7 +29,9 @@ copy /Y "appicon.ico" "build\windows\icon.ico" >nul
 
 REM Build with Wails
 echo [4/5] Building with Wails...
-wails build
+for /f "tokens=*" %%i in ('git describe --tags --abbrev^=0 2^>nul') do set VERSION=%%i
+if not defined VERSION set VERSION=dev
+wails build -ldflags="-s -w -X main.version=%VERSION%"
 if %errorlevel% neq 0 (
     echo [ERROR] Wails build failed
     exit /b 1
