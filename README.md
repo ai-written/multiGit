@@ -2,7 +2,7 @@
 
 使用 Go + Wails v2 构建的桌面端批量 npm 依赖更新工具。
 
-![alt text](image.png)
+![示例图片](image.png)
 
 ## 功能
 
