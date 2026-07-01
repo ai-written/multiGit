@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
+	"unsafe"
 
 	"gitdesk/internal/config"
 	"gitdesk/internal/git"
@@ -13,6 +17,96 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+//go:embed appicon.ico
+var iconICO []byte
+
+var (
+	user32                         = syscall.NewLazyDLL("user32.dll")
+	procCreateIconFromResourceEx   = user32.NewProc("CreateIconFromResourceEx")
+	procSendMessageW               = user32.NewProc("SendMessageW")
+	procFindWindowW                = user32.NewProc("FindWindowW")
+)
+
+type icoEntry struct {
+	width  int
+	height int
+	data   []byte
+}
+
+func findICOIconResource(icoData []byte, targetSize int) *icoEntry {
+	if len(icoData) < 22 {
+		return nil
+	}
+	count := int(icoData[4]) | int(icoData[5])<<8
+	if count == 0 {
+		return nil
+	}
+	offset := 6
+	for i := 0; i < count; i++ {
+		if offset+16 > len(icoData) {
+			break
+		}
+		w := int(icoData[offset])
+		h := int(icoData[offset+1])
+		if w == 0 {
+			w = 256
+		}
+		if h == 0 {
+			h = 256
+		}
+		size := int(icoData[offset+8]) | int(icoData[offset+9])<<8 | int(icoData[offset+10])<<16 | int(icoData[offset+11])<<24
+		dataOff := int(icoData[offset+12]) | int(icoData[offset+13])<<8 | int(icoData[offset+14])<<16 | int(icoData[offset+15])<<24
+		if dataOff+size <= len(icoData) && w == targetSize && h == targetSize {
+			return &icoEntry{width: w, height: h, data: icoData[dataOff : dataOff+size]}
+		}
+		offset += 16
+	}
+	return nil
+}
+
+func (a *App) getHWND() uintptr {
+	name, _ := syscall.UTF16PtrFromString("GitDesk")
+	hwnd, _, _ := procFindWindowW.Call(0, 0, uintptr(unsafe.Pointer(name)), 0)
+	return hwnd
+}
+
+func (a *App) setWindowIcon() {
+	time.Sleep(300 * time.Millisecond)
+	hwnd := a.getHWND()
+	if hwnd == 0 {
+		time.Sleep(500 * time.Millisecond)
+		hwnd = a.getHWND()
+	}
+	if hwnd == 0 {
+		return
+	}
+
+	res := findICOIconResource(iconICO, 32)
+	if res == nil {
+		res = findICOIconResource(iconICO, 16)
+	}
+	if res == nil {
+		return
+	}
+
+	hIcon, _, _ := procCreateIconFromResourceEx.Call(
+		uintptr(unsafe.Pointer(&res.data[0])),
+		uintptr(len(res.data)),
+		1,
+		0x00030000,
+		uintptr(res.width),
+		uintptr(res.height),
+		0,
+	)
+	if hIcon != 0 {
+		const WM_SETICON = 0x0080
+		const ICON_SMALL = 0
+		const ICON_BIG = 1
+		procSendMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, hIcon)
+		procSendMessageW.Call(hwnd, WM_SETICON, ICON_BIG, hIcon)
+	}
+}
 
 type App struct {
 	ctx context.Context
@@ -24,6 +118,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	go a.setWindowIcon()
 }
 
 func (a *App) LoadConfig() (config.Config, error) {

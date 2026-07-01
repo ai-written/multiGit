@@ -17,8 +17,8 @@
     --success: #1a7f37;
     --error: #cf222e;
     --warn: #9a6700;
-    --terminal-bg: #f6f8fa;
-    --terminal-text: #1f2328;
+    --terminal-bg: #f0f4f8;
+    --terminal-text: #1a7f37;
     --radius: 6px;
     --radius-lg: 10px;
     --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', monospace;

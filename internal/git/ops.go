@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gitdesk/internal/command"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -14,6 +15,7 @@ import (
 func CurrentBranch(cwd string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -24,12 +26,14 @@ func CurrentBranch(cwd string) (string, error) {
 func IsRepo(cwd string) bool {
 	cmd := exec.Command("git", "rev-parse", "--git-dir")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Run() == nil
 }
 
 func statusHasChanges(cwd string) (bool, error) {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -57,6 +61,7 @@ func Stash(ctx context.Context, cwd string) (bool, error) {
 func StashPop(ctx context.Context, cwd string) {
 	cmd := exec.Command("git", "stash", "list")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.Output()
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return
@@ -138,6 +143,7 @@ func ResetHard(ctx context.Context, cwd string, ref string) {
 func listLocalBranches(cwd string) ([]string, error) {
 	cmd := exec.Command("git", "branch")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

@@ -6,7 +6,6 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
 const terminal = $('#terminalContent');
-const terminalContainer = $('#terminal');
 
 let config = {
     registry: 'https://registry.npmmirror.com',
@@ -20,7 +19,7 @@ function log(text) {
     const div = document.createElement('div');
     div.textContent = text;
     terminal.appendChild(div);
-    terminalContainer.scrollTop = terminalContainer.scrollHeight;
+    terminal.scrollTop = terminal.scrollHeight;
 }
 
 function logError(text) {
@@ -28,7 +27,7 @@ function logError(text) {
     div.textContent = text;
     div.style.color = '#ef4444';
     terminal.appendChild(div);
-    terminalContainer.scrollTop = terminalContainer.scrollHeight;
+    terminal.scrollTop = terminal.scrollHeight;
 }
 
 EventsOn('log', (text) => {

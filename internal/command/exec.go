@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"syscall"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -18,6 +19,7 @@ func Run(ctx context.Context, name string, args []string, cwd string) error {
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -63,6 +65,7 @@ func RunStreaming(ctx context.Context, name string, args []string, cwd string) e
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
 	cmd.Stdout = &writer{ctx: ctx}
 	cmd.Stderr = &writer{ctx: ctx}

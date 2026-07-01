@@ -1,5 +1,6 @@
 # Build
 build/
+appicon.ico
 *.exe
 *.exe~
 
@@ -18,3 +19,4 @@ vendor/
 
 # Wails generated (recreated on build)
 frontend/wailsjs/
+*.syso

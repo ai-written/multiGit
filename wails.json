@@ -2,6 +2,7 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "gitdesk",
   "outputfilename": "gitdesk",
+  "iconfilename": "appicon.png",
   "frontend:install": "",
   "frontend:build": "",
   "frontend:dev:watcher": "",
