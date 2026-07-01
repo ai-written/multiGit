@@ -36,21 +36,18 @@ jobs:
 
       - name: Prepare release asset
         run: |
-          $files = Get-ChildItem "build\bin" -File
-          if ($files.Count -eq 1) {
-            Copy-Item $files[0].FullName ".\" -Force
-            echo "asset=$($files[0].Name)" >> $env:GITHUB_ENV
-          } else {
-            Compress-Archive -Path build\bin\* -DestinationPath release.zip -Force
-            echo "asset=release.zip" >> $env:GITHUB_ENV
-          }
+          Compress-Archive -Path build\bin\* -DestinationPath depdash.zip -Force
+          $hash = (Get-FileHash depdash.zip -Algorithm SHA256).Hash
+          "$hash  depdash.zip" | Out-File -Encoding ascii "depdash.zip.sha256"
         shell: pwsh
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: ${{ env.asset }}
+          files: |
+            depdash.zip
+            depdash.zip.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -2,6 +2,8 @@
 
 使用 Go + Wails v2 构建的桌面端批量 npm 依赖更新工具。
 
+![alt text](image.png)
+
 ## 功能
 
 - 选择项目根目录，自动扫描所有 Git 子项目
