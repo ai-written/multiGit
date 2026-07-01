@@ -1,0 +1,107 @@
+package config
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+)
+
+type Config struct {
+	Registry         string   `json:"registry"`
+	Branches         []string `json:"branches"`
+	Packages         []string `json:"packages"`
+	AutoBumpProjects []string `json:"autoBumpProjects"`
+	RootPath         string   `json:"rootPath"`
+}
+
+func DefaultConfig() Config {
+	return Config{
+		Registry:         "https://registry.npmmirror.com",
+		Branches:         []string{"main", "develop"},
+		Packages:         []string{},
+		AutoBumpProjects: []string{},
+		RootPath:         "",
+	}
+}
+
+func configDir() (string, error) {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		appData = filepath.Join(home, ".config")
+	}
+	return filepath.Join(appData, "gitdesk"), nil
+}
+
+func configPath() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.json"), nil
+}
+
+func Load() (Config, error) {
+	path, err := configPath()
+	if err != nil {
+		return Config{}, err
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg := DefaultConfig()
+		if err := Save(cfg); err != nil {
+			return Config{}, err
+		}
+		return cfg, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
+	}
+
+	if cfg.Registry == "" {
+		cfg.Registry = "https://registry.npmmirror.com"
+	}
+	if cfg.Branches == nil {
+		cfg.Branches = []string{"main", "develop"}
+	}
+	if cfg.Packages == nil {
+		cfg.Packages = []string{}
+	}
+	if cfg.AutoBumpProjects == nil {
+		cfg.AutoBumpProjects = []string{}
+	}
+
+	return cfg, nil
+}
+
+func Save(cfg Config) error {
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0644)
+}

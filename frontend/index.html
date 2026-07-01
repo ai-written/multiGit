@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitDesk</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <script src="/wailsjs/runtime/runtime.js" type="module"></script>
+    <script src="/src/app.js" type="module"></script>
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="titlebar-drag">
+                <span class="logo">GitDesk</span>
+            </div>
+            <div class="titlebar-controls">
+                <button class="btn-icon btn-titlebar" id="btnTheme" title="切换主题">&#9788;</button>
+                <button class="btn-icon btn-titlebar" id="btnConfig" title="设置">&#9881;</button>
+                <button class="btn-icon btn-titlebar" id="btnMinimize" title="最小化">&minus;</button>
+                <button class="btn-icon btn-titlebar" id="btnMaximize" title="最大化">&#9633;</button>
+                <button class="btn-icon btn-titlebar btn-close" id="btnClose" title="关闭">&times;</button>
+            </div>
+        </header>
+        <main class="main">
+            <aside class="panel panel-left">
+                <form id="updateForm" class="form">
+                    <div class="form-group">
+                        <label class="form-label">项目根目录</label>
+                        <div class="input-row">
+                            <input type="text" id="rootPath" class="input" placeholder="选择项目根目录..." readonly />
+                            <button type="button" class="btn btn-secondary" id="btnBrowse">浏览</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="branch">目标分支</label>
+                        <select id="branch" class="input"></select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">选择项目</label>
+                        <div id="projectList" class="checkbox-list"></div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">选择更新包</label>
+                        <div id="packageList" class="checkbox-list"></div>
+                    </div>
+                    <div id="packageVersions" class="form-group" style="display:none"></div>
+                    <div class="button-row">
+                        <button type="submit" class="btn btn-primary" id="btnRun">执行更新</button>
+                        <button type="reset" class="btn btn-secondary" id="btnReset">重置</button>
+                    </div>
+                </form>
+            </aside>
+            <section class="panel panel-right">
+                <div class="terminal" id="terminal">
+                    <div class="terminal-content" id="terminalContent">
+                        <span class="terminal-prompt">$ _</span>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="modal-overlay" id="configModal" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>设置</h2>
+                <button class="btn-icon" id="btnCloseConfig">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label" for="cfgRegistry">npm 镜像源</label>
+                    <input type="text" id="cfgRegistry" class="input" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cfgBranches">分支列表（逗号分隔）</label>
+                    <input type="text" id="cfgBranches" class="input" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cfgPackages">常用包名（逗号分隔）</label>
+                    <input type="text" id="cfgPackages" class="input" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cfgAutoBump">自动升版本的项目（逗号分隔）</label>
+                    <input type="text" id="cfgAutoBump" class="input" />
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="btnSaveConfig">保存</button>
+                <button class="btn btn-secondary" id="btnCancelConfig">取消</button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
