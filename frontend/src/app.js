@@ -158,7 +158,7 @@ async function onSubmit(e) {
     try {
         const result = await UpdatePackage(selectedProjects, packages, branch);
         if (result.ok) {
-            log(result.message);
+            // 成功消息已通过 EventsOn('log') 事件监听器显示，无需重复打印
         } else {
             logError(result.message);
         }
