@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo   DepDash - Wails Build Script
+echo   MultiGit - Wails Build Script
 echo ========================================
 
 REM Generate ICO from appicon.png
@@ -39,5 +39,5 @@ if %errorlevel% neq 0 (
 
 echo [5/5] Build complete
 echo.
-echo Output: build\bin\depdash.exe
+echo Output: build\bin\MultiGit.exe
 echo ========================================

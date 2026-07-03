@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"depdash/internal/command"
+	"multigit/internal/command"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

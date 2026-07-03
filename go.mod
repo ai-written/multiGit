@@ -1,4 +1,4 @@
-module depdash
+module multigit
 
 go 1.26.0
 

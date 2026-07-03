@@ -410,10 +410,10 @@ function applyTheme(dark) {
 themeBtn.addEventListener('click', () => {
     const next = !isDark();
     applyTheme(next);
-    localStorage.setItem('depdash-theme', next ? 'dark' : 'light');
+    localStorage.setItem('multigit-theme', next ? 'dark' : 'light');
 });
 
-const saved = localStorage.getItem('depdash-theme');
+const saved = localStorage.getItem('multigit-theme');
 applyTheme(saved === 'dark' || (saved === null && window.matchMedia('(prefers-color-scheme: dark)').matches));
 
 window.addEventListener('resize', updateMaximizeIcon);

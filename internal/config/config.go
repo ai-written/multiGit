@@ -23,7 +23,7 @@ func DefaultConfig() Config {
 		Packages:         []string{},
 		AutoBumpProjects: []string{},
 		RootPath:         "",
-		UpdateRepo:       "ai-written/depdash",
+		UpdateRepo:       "ai-written/multiGit",
 		CommitCount:      5,
 	}
 }
@@ -37,7 +37,7 @@ func configDir() (string, error) {
 		}
 		appData = filepath.Join(home, ".config")
 	}
-	return filepath.Join(appData, "depdash"), nil
+	return filepath.Join(appData, "MultiGit"), nil
 }
 
 func configPath() (string, error) {

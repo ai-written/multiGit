@@ -1,14 +1,14 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "depdash",
-  "outputfilename": "depdash",
+  "name": "MultiGit",
+  "outputfilename": "MultiGit",
   "iconfilename": "appicon.png",
   "frontend:install": "",
   "frontend:build": "",
   "frontend:dev:watcher": "",
   "frontend:dev:serverUrl": "",
   "author": {
-    "name": "DepDash",
+    "name": "MultiGit",
     "email": ""
   }
 }

@@ -18,7 +18,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:            "DepDash",
+		Title:            "MultiGit",
 		Width:            1100,
 		Height:           680,
 		MinWidth:         900,

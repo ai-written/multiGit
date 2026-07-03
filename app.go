@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+"multigit/internal/config"
 
-	"depdash/internal/config"
-	"depdash/internal/git"
-	"depdash/internal/npm"
+	"multigit/internal/git"
 
+	"multigit/internal/npm"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -70,7 +70,7 @@ func findICOIconResource(icoData []byte, targetSize int) *icoEntry {
 }
 
 func (a *App) getHWND() uintptr {
-	name, _ := syscall.UTF16PtrFromString("DepDash")
+	name, _ := syscall.UTF16PtrFromString("MultiGit")
 	hwnd, _, _ := procFindWindowW.Call(0, 0, uintptr(unsafe.Pointer(name)), 0)
 	return hwnd
 }
@@ -188,7 +188,7 @@ type ProjectCommits struct {
 }
 
 func (a *App) UpdatePackage(dirList []string, packages []string, branch string) (UpdateResult, error) {
-	runtime.EventsEmit(a.ctx, "log", "DepDash 批量依赖更新")
+	runtime.EventsEmit(a.ctx, "log", "MultiGit 批量依赖更新")
 	runtime.EventsEmit(a.ctx, "log", "========================================")
 
 	cfg, err := config.Load()
@@ -359,7 +359,7 @@ func (a *App) GetRecentCommits(dirList []string, branch string, count int) []Pro
 }
 
 func (a *App) CherryPickCommits(dirList []string, sourceBranch string, selectedCommits map[string][]string, destBranch string) UpdateResult {
-	runtime.EventsEmit(a.ctx, "log", "DepDash Cherry-Pick")
+	runtime.EventsEmit(a.ctx, "log", "MultiGit Cherry-Pick")
 	runtime.EventsEmit(a.ctx, "log", "========================================")
 
 	successCount := 0

@@ -1,8 +1,8 @@
-# DepDash
+# MultiGit
 
 使用 Go + Wails v2 构建的桌面端批量 Git 项目工具。
 
-![示例图片](image.png)
+![alt text](image.png)
 
 ## 功能
 
@@ -48,11 +48,11 @@ wails dev
 build.bat
 ```
 
-构建产物位于 `build/bin/depdash.exe`。
+构建产物位于 `build/bin/MultiGit.exe`。
 
 ## 配置
 
-首次运行自动在 `%APPDATA%/depdash/config.json` 生成配置文件：
+首次运行自动在 `%APPDATA%/MultiGit/config.json` 生成配置文件：
 
 ```json
 {
@@ -61,7 +61,7 @@ build.bat
     "packages": [],
     "autoBumpProjects": [],
     "rootPath": "",
-    "updateRepo": "ai-written/depdash",
+    "updateRepo": "ai-written/multiGit",
     "commitCount": 5
 }
 ```

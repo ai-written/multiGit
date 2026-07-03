@@ -36,9 +36,9 @@ jobs:
 
       - name: Prepare release asset
         run: |
-          Compress-Archive -Path build\bin\* -DestinationPath depdash.zip -Force
-          $hash = (Get-FileHash depdash.zip -Algorithm SHA256).Hash
-          "$hash  depdash.zip" | Out-File -Encoding ascii "depdash.zip.sha256"
+          Compress-Archive -Path build\bin\* -DestinationPath MultiGit-${{ github.ref_name }}.zip -Force
+          $hash = (Get-FileHash MultiGit-${{ github.ref_name }}.zip -Algorithm SHA256).Hash
+          "$hash  MultiGit-${{ github.ref_name }}.zip" | Out-File -Encoding ascii "MultiGit-${{ github.ref_name }}.zip.sha256"
         shell: pwsh
 
       - name: Create Release
@@ -46,8 +46,8 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           files: |
-            depdash.zip
-            depdash.zip.sha256
+            MultiGit-*
+            MultiGit-*.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
