@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, CherryPickCommits } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -9,12 +9,15 @@ const terminal = $('#terminalContent');
 
 const versionInputCache = new Map();
 
+let currentMode = 'update';
+
 let config = {
     registry: 'https://registry.npmmirror.com',
     branches: ['main', 'develop'],
     packages: [],
     autoBumpProjects: [],
-    rootPath: ''
+    rootPath: '',
+    commitCount: 5
 };
 
 function log(text) {
@@ -54,6 +57,22 @@ function applyConfigToUI() {
     branchSel.innerHTML = config.branches.map(b => `<option value="${b}">${b}</option>`).join('');
 
     renderPackageList();
+}
+
+function switchMode(mode) {
+    currentMode = mode;
+
+    $$('.tab').forEach(t => t.classList.toggle('tab-active', t.dataset.mode === mode));
+
+    if (mode === 'update') {
+        $('#branchLabel').textContent = '目标分支';
+        $('#updateSection').style.display = '';
+        $('#cherrypickSection').style.display = 'none';
+    } else {
+        $('#branchLabel').textContent = '源分支';
+        $('#updateSection').style.display = 'none';
+        $('#cherrypickSection').style.display = '';
+    }
 }
 
 function renderPackageList() {
@@ -192,11 +211,149 @@ function onReset() {
     versionInputCache.clear();
 }
 
+async function onFetchCommits() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const branch = $('#branch').value;
+    if (!branch) {
+        logError('请选择源分支');
+        return;
+    }
+
+    const btn = $('#btnFetchCommits');
+    btn.disabled = true;
+    btn.textContent = '获取中...';
+
+    try {
+        const result = await GetRecentCommits(selectedProjects, branch, config.commitCount);
+        renderCommitList(result);
+    } catch (e) {
+        logError('获取提交记录失败: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '获取最近提交';
+    }
+}
+
+function renderCommitList(projectCommits) {
+    const container = $('#commitList');
+    if (!projectCommits || projectCommits.length === 0) {
+        container.innerHTML = '<div style="padding:8px;color:var(--text-muted);font-size:12px">没有获取到提交记录</div>';
+        return;
+    }
+
+    container.innerHTML = projectCommits.map((pc, pi) => {
+        const commits = [...pc.commits].reverse();
+        const total = pc.commits.length;
+        const commitsHtml = commits.map((c, ci) =>
+            `<label class="commit-item">
+                <input type="checkbox" class="commit-checkbox" data-project="${pc.project_path}" data-hash="${c.hash}" data-order="${total - 1 - ci}" />
+                <div class="commit-body">
+                    <div class="commit-row">
+                        <span class="commit-hash">${c.hash.slice(0, 8)}</span>
+                        <span class="commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
+                    </div>
+                    <div class="commit-meta">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</div>
+                </div>
+            </label>`
+        ).join('');
+
+        return `<div class="commit-project">
+            <div class="commit-project-header" data-index="${pi}">
+                <span class="commit-project-toggle">▼</span>
+                <span>${escapeHtml(pc.project_name)} (${pc.commits.length} commits)</span>
+            </div>
+            <div class="commit-project-body">${commitsHtml}</div>
+        </div>`;
+    }).join('');
+
+    container.querySelectorAll('.commit-project-header').forEach(h => {
+        h.addEventListener('click', () => {
+            const body = h.nextElementSibling;
+            const toggle = h.querySelector('.commit-project-toggle');
+            body.classList.toggle('hidden');
+            toggle.classList.toggle('collapsed');
+        });
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function onCherryPick() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const sourceBranch = $('#branch').value;
+    if (!sourceBranch) {
+        logError('请选择源分支');
+        return;
+    }
+
+    const destBranch = $('#cpDestBranch').value.trim();
+    if (!destBranch) {
+        logError('请输入目标分支名');
+        return;
+    }
+
+    const selectedCommits = {};
+    let totalChecked = 0;
+    $$('.commit-checkbox:checked').forEach(cb => {
+        const project = cb.dataset.project;
+        const hash = cb.dataset.hash;
+        const order = parseInt(cb.dataset.order);
+        if (!selectedCommits[project]) {
+            selectedCommits[project] = [];
+        }
+        selectedCommits[project].push({ hash, order });
+        totalChecked++;
+    });
+
+    if (totalChecked === 0) {
+        logError('请至少选择一个 commit');
+        return;
+    }
+
+    for (const project of Object.keys(selectedCommits)) {
+        selectedCommits[project].sort((a, b) => a.order - b.order);
+        selectedCommits[project] = selectedCommits[project].map(c => c.hash);
+    }
+
+    terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+
+    const btn = $('#btnCherryPick');
+    btn.disabled = true;
+    btn.textContent = '执行中...';
+
+    try {
+        const result = await CherryPickCommits(selectedProjects, sourceBranch, selectedCommits, destBranch);
+        if (!result.ok) {
+            logError(result.message);
+        }
+    } catch (e) {
+        logError('执行出错: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '执行 Cherry-Pick';
+    }
+}
+
 function openConfig() {
     $('#cfgRegistry').value = config.registry || '';
     $('#cfgBranches').value = (config.branches || []).join(', ');
     $('#cfgPackages').value = (config.packages || []).join(', ');
     $('#cfgAutoBump').value = (config.autoBumpProjects || []).join(', ');
+    $('#cfgCommitCount').value = config.commitCount || 5;
     $('#configModal').style.display = 'flex';
 }
 
@@ -209,6 +366,7 @@ async function saveConfig() {
     config.branches = $('#cfgBranches').value.split(',').map(s => s.trim()).filter(Boolean);
     config.packages = $('#cfgPackages').value.split(',').map(s => s.trim()).filter(Boolean);
     config.autoBumpProjects = $('#cfgAutoBump').value.split(',').map(s => s.trim()).filter(Boolean);
+    config.commitCount = parseInt($('#cfgCommitCount').value) || 5;
 
     try {
         await SaveConfig(config);
@@ -227,6 +385,12 @@ $('#btnCancelConfig').addEventListener('click', closeConfig);
 $('#btnSaveConfig').addEventListener('click', saveConfig);
 $('#updateForm').addEventListener('submit', onSubmit);
 $('#btnReset').addEventListener('click', onReset);
+
+$$('.tab').forEach(tab => {
+    tab.addEventListener('click', () => switchMode(tab.dataset.mode));
+});
+$('#btnFetchCommits').addEventListener('click', onFetchCommits);
+$('#btnCherryPick').addEventListener('click', onCherryPick);
 
 $('#btnMinimize').addEventListener('click', () => WindowMinimise());
 $('#btnMaximize').addEventListener('click', () => {

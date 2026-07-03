@@ -29,6 +29,10 @@
         <main class="main">
             <aside class="panel panel-left">
                 <form id="updateForm" class="form">
+                    <div class="tab-bar">
+                        <button type="button" class="tab tab-active" data-mode="update">更新依赖</button>
+                        <button type="button" class="tab" data-mode="cherrypick">Cherry-Pick</button>
+                    </div>
                     <div class="form-group">
                         <label class="form-label">项目根目录</label>
                         <div class="input-row">
@@ -37,21 +41,34 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="branch">目标分支</label>
+                        <label class="form-label" id="branchLabel" for="branch">目标分支</label>
                         <select id="branch" class="input"></select>
                     </div>
                     <div class="form-group">
                         <label class="form-label">选择项目</label>
                         <div id="projectList" class="checkbox-list"></div>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">选择更新包</label>
-                        <div id="packageList" class="checkbox-list"></div>
+                    <div id="updateSection">
+                        <div class="form-group">
+                            <label class="form-label">选择更新包</label>
+                            <div id="packageList" class="checkbox-list"></div>
+                        </div>
+                        <div id="packageVersions" class="form-group" style="display:none"></div>
+                        <div class="button-row">
+                            <button type="submit" class="btn btn-primary" id="btnRun">执行更新</button>
+                            <button type="button" class="btn btn-secondary" id="btnReset">重置</button>
+                        </div>
                     </div>
-                    <div id="packageVersions" class="form-group" style="display:none"></div>
-                    <div class="button-row">
-                        <button type="submit" class="btn btn-primary" id="btnRun">执行更新</button>
-                        <button type="button" class="btn btn-secondary" id="btnReset">重置</button>
+                    <div id="cherrypickSection" style="display:none">
+                        <div class="form-group">
+                            <label class="form-label" for="cpDestBranch">Cherry-Pick 目标分支</label>
+                            <input type="text" id="cpDestBranch" class="input" placeholder="输入目标分支名" />
+                        </div>
+                        <div class="button-row">
+                            <button type="button" class="btn btn-secondary" id="btnFetchCommits">获取最近提交</button>
+                            <button type="button" class="btn btn-primary" id="btnCherryPick">执行 Cherry-Pick</button>
+                        </div>
+                        <div id="commitList" class="form-group commit-list"></div>
                     </div>
                 </form>
             </aside>
@@ -87,6 +104,10 @@
                 <div class="form-group">
                     <label class="form-label" for="cfgAutoBump">自动升版本的项目（逗号分隔）</label>
                     <input type="text" id="cfgAutoBump" class="input" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cfgCommitCount">Cherry-Pick 显示提交数</label>
+                    <input type="number" id="cfgCommitCount" class="input" min="1" max="100" />
                 </div>
             </div>
             <div class="modal-footer">

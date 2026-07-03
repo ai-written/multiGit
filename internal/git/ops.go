@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,10 +13,17 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+type CommitInfo struct {
+	Hash    string `json:"hash"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
+	Message string `json:"message"`
+}
+
 func CurrentBranch(cwd string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -26,14 +34,14 @@ func CurrentBranch(cwd string) (string, error) {
 func IsRepo(cwd string) bool {
 	cmd := exec.Command("git", "rev-parse", "--git-dir")
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd.Run() == nil
 }
 
 func statusHasChanges(cwd string) (bool, error) {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -61,7 +69,7 @@ func Stash(ctx context.Context, cwd string) (bool, error) {
 func StashPop(ctx context.Context, cwd string) {
 	cmd := exec.Command("git", "stash", "list")
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return
@@ -143,7 +151,7 @@ func ResetHard(ctx context.Context, cwd string, ref string) {
 func listLocalBranches(cwd string) ([]string, error) {
 	cmd := exec.Command("git", "branch")
 	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -162,6 +170,7 @@ func listLocalBranches(cwd string) ([]string, error) {
 func listRemoteBranches(cwd string) ([]string, error) {
 	cmd := exec.Command("git", "branch", "-r")
 	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -174,4 +183,87 @@ func listRemoteBranches(cwd string) ([]string, error) {
 		}
 	}
 	return branches, nil
+}
+
+func BranchExists(cwd string, branch string) (bool, error) {
+	localBranches, err := listLocalBranches(cwd)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range localBranches {
+		if b == branch {
+			return true, nil
+		}
+	}
+
+	remoteBranches, err := listRemoteBranches(cwd)
+	if err != nil {
+		return false, err
+	}
+	remote := "origin/" + branch
+	for _, b := range remoteBranches {
+		if b == remote {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func Fetch(ctx context.Context, cwd string) error {
+	runtime.EventsEmit(ctx, "log", "[git] 正在拉取远程...")
+	err := command.Run(ctx, "git", []string{"fetch", "origin"}, cwd)
+	if err == nil {
+		runtime.EventsEmit(ctx, "log", "[git] 远程拉取完成")
+	}
+	return err
+}
+
+func Log(cwd, ref string, n int) ([]CommitInfo, error) {
+	cmd := exec.Command("git", "log", ref, "--reverse", fmt.Sprintf("-n%d", n), "--format=%H%x00%an%x00%ar%x00%s")
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var commits []CommitInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 4)
+		if len(parts) == 4 {
+			commits = append(commits, CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]})
+		}
+	}
+	return commits, nil
+}
+
+func IsAncestor(cwd, hash, branch string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", hash, branch)
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func CherryPick(ctx context.Context, cwd string, hash string) error {
+	return command.Run(ctx, "git", []string{"cherry-pick", hash}, cwd)
+}
+
+func CherryPickAbort(ctx context.Context, cwd string) {
+	command.Run(ctx, "git", []string{"cherry-pick", "--abort"}, cwd)
+}
+
+func PushBranch(ctx context.Context, cwd string, branch string) error {
+	runtime.EventsEmit(ctx, "log", "[git] 推送到 origin/"+branch+"...")
+	return command.Run(ctx, "git", []string{"push", "origin", branch}, cwd)
 }

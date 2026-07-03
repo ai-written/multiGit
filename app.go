@@ -181,6 +181,12 @@ type UpdateResult struct {
 	Message string `json:"message"`
 }
 
+type ProjectCommits struct {
+	ProjectName string          `json:"project_name"`
+	ProjectPath string          `json:"project_path"`
+	Commits     []git.CommitInfo `json:"commits"`
+}
+
 func (a *App) UpdatePackage(dirList []string, packages []string, branch string) (UpdateResult, error) {
 	runtime.EventsEmit(a.ctx, "log", "DepDash 批量依赖更新")
 	runtime.EventsEmit(a.ctx, "log", "========================================")
@@ -313,6 +319,171 @@ func (a *App) UpdatePackage(dirList []string, packages []string, branch string) 
 	runtime.EventsEmit(a.ctx, "log", "========================================")
 
 	return UpdateResult{OK: true, Message: msg}, nil
+}
+
+func (a *App) GetRecentCommits(dirList []string, branch string, count int) []ProjectCommits {
+	var result []ProjectCommits
+
+	for _, cwd := range dirList {
+		projectName := filepath.Base(cwd)
+		if !git.IsRepo(cwd) {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("跳过: %s (不是 git 仓库)", projectName))
+			continue
+		}
+
+		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 的提交记录...", projectName))
+
+		if err := git.Fetch(a.ctx, cwd); err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 失败: %s", projectName, err.Error()))
+			continue
+		}
+
+		remoteRef := "origin/" + branch
+		commits, err := git.Log(cwd, remoteRef, count)
+		if err != nil {
+			commits, err = git.Log(cwd, branch, count)
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 提交记录失败: %s", projectName, err.Error()))
+				continue
+			}
+		}
+
+		result = append(result, ProjectCommits{
+			ProjectName: projectName,
+			ProjectPath: cwd,
+			Commits:     commits,
+		})
+	}
+
+	return result
+}
+
+func (a *App) CherryPickCommits(dirList []string, sourceBranch string, selectedCommits map[string][]string, destBranch string) UpdateResult {
+	runtime.EventsEmit(a.ctx, "log", "DepDash Cherry-Pick")
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	successCount := 0
+	failCount := 0
+
+	for _, cwd := range dirList {
+		hashes, ok := selectedCommits[cwd]
+		if !ok || len(hashes) == 0 {
+			continue
+		}
+
+		projectName := filepath.Base(cwd)
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("项目: %s (%s)", projectName, cwd))
+
+		oldBranch, err := git.CurrentBranch(cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取当前分支失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		isStash, err := git.Stash(a.ctx, cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("储藏失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		projectFailed := false
+		func() {
+			if err := git.SwitchOrCreate(a.ctx, cwd, sourceBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切换到源分支失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+			if err := git.Pull(a.ctx, cwd, sourceBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("拉取源分支失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+
+			if sourceBranch != destBranch {
+				exists, err := git.BranchExists(cwd, destBranch)
+				if err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("检查目标分支失败: %s", err.Error()))
+					projectFailed = true
+					return
+				}
+				if !exists {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("目标分支 %s 不存在，已跳过", destBranch))
+					projectFailed = true
+					return
+				}
+
+				if err := git.SwitchOrCreate(a.ctx, cwd, destBranch); err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切换到目标分支失败: %s", err.Error()))
+					projectFailed = true
+					return
+				}
+				if err := git.Pull(a.ctx, cwd, destBranch); err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("拉取目标分支失败: %s", err.Error()))
+					projectFailed = true
+					return
+				}
+			}
+
+			cherryFailed := false
+			for _, hash := range hashes {
+				exists, err := git.IsAncestor(cwd, hash, "HEAD")
+				if err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("检查 commit %s 失败: %s", hash, err.Error()))
+					cherryFailed = true
+					break
+				}
+				if exists {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("跳过: commit %s 已存在于目标分支", hash[:8]))
+					continue
+				}
+
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("cherry-pick %s...", hash[:8]))
+				if err := git.CherryPick(a.ctx, cwd, hash); err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("commit %s 产生冲突，已中止", hash[:8]))
+					git.CherryPickAbort(a.ctx, cwd)
+					cherryFailed = true
+					break
+				}
+			}
+
+			if cherryFailed {
+				projectFailed = true
+				return
+			}
+
+			if err := git.PushBranch(a.ctx, cwd, destBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("推送失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("完成: %s", projectName))
+		}()
+
+		if projectFailed {
+			failCount++
+		} else {
+			successCount++
+		}
+
+		if err := git.SwitchOrCreate(a.ctx, cwd, oldBranch); err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切回原分支失败: %s", err.Error()))
+		}
+		if isStash {
+			git.StashPop(a.ctx, cwd)
+		}
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", "")
+	}
+
+	msg := fmt.Sprintf("完成: %d 成功, %d 失败", successCount, failCount)
+	runtime.EventsEmit(a.ctx, "log", msg)
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	return UpdateResult{OK: true, Message: msg}
 }
 
 func contains(slice []string, item string) bool {

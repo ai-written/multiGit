@@ -13,6 +13,7 @@ type Config struct {
 	AutoBumpProjects []string `json:"autoBumpProjects"`
 	RootPath         string   `json:"rootPath"`
 	UpdateRepo       string   `json:"updateRepo"`
+	CommitCount      int      `json:"commitCount"`
 }
 
 func DefaultConfig() Config {
@@ -23,6 +24,7 @@ func DefaultConfig() Config {
 		AutoBumpProjects: []string{},
 		RootPath:         "",
 		UpdateRepo:       "ai-written/depdash",
+		CommitCount:      5,
 	}
 }
 
@@ -81,6 +83,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AutoBumpProjects == nil {
 		cfg.AutoBumpProjects = []string{}
+	}
+	if cfg.CommitCount == 0 {
+		cfg.CommitCount = 5
 	}
 
 	return cfg, nil

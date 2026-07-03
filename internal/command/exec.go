@@ -14,12 +14,14 @@ import (
 	"golang.org/x/text/transform"
 )
 
+const CREATE_NO_WINDOW = 0x08000000
+
 func Run(ctx context.Context, name string, args []string, cwd string) error {
 	cmd := exec.Command(name, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -65,7 +67,7 @@ func RunStreaming(ctx context.Context, name string, args []string, cwd string) e
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}
 
 	cmd.Stdout = &writer{ctx: ctx}
 	cmd.Stderr = &writer{ctx: ctx}
