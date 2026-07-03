@@ -7,6 +7,8 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 const terminal = $('#terminalContent');
 
+const versionInputCache = new Map();
+
 let config = {
     registry: 'https://registry.npmmirror.com',
     branches: ['main', 'develop'],
@@ -71,11 +73,17 @@ function renderPackageList() {
 function onPackageChange() {
     const container = $('#packageVersions');
     const checked = $$('.pkg-checkbox:checked');
+
     if (checked.length === 0) {
         container.style.display = 'none';
         container.innerHTML = '';
         return;
     }
+
+    $$('.pkg-version').forEach(input => {
+        versionInputCache.set(input.dataset.pkg, input.value);
+    });
+
     container.style.display = 'flex';
     container.innerHTML = '<label class="form-label">输入版本号</label>' +
         Array.from(checked).map(cb =>
@@ -84,6 +92,12 @@ function onPackageChange() {
                 <input type="text" class="input pkg-version" data-pkg="${cb.value}" placeholder="输入版本号" />
             </div>`
         ).join('');
+
+    $$('.pkg-version').forEach(input => {
+        if (versionInputCache.has(input.dataset.pkg)) {
+            input.value = versionInputCache.get(input.dataset.pkg);
+        }
+    });
 }
 
 async function browseDir() {
@@ -175,6 +189,7 @@ function onReset() {
     $('#packageVersions').style.display = 'none';
     $('#packageVersions').innerHTML = '';
     terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+    versionInputCache.clear();
 }
 
 function openConfig() {
