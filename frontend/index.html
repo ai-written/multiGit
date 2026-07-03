@@ -32,6 +32,7 @@
                     <div class="tab-bar">
                         <button type="button" class="tab tab-active" data-mode="update">更新依赖</button>
                         <button type="button" class="tab" data-mode="cherrypick">Cherry-Pick</button>
+                        <button type="button" class="tab" data-mode="forcecheckout">强制检出</button>
                     </div>
                     <div class="form-group">
                         <label class="form-label">项目根目录</label>
@@ -70,6 +71,25 @@
                         </div>
                         <div id="commitList" class="form-group commit-list"></div>
                     </div>
+                    <div id="forcecheckoutSection" style="display:none">
+                        <div class="form-group">
+                            <label class="form-label" for="fcTargetBranch">强制检出目标分支</label>
+                            <input type="text" id="fcTargetBranch" class="input" placeholder="输入目标分支名（将重置为该分支）" />
+                        </div>
+                        <div class="form-group">
+                            <div class="checkbox-list fc-info" style="border-color:var(--warn);padding:10px;background:var(--surface);font-size:12px;color:var(--warn);">
+                                ⚠ 目标分支将被强制重置为源分支的最新状态，历史将被覆盖<br>
+                                <span style="color:var(--success)">✔ 目标分支存在时将自动备份为 <strong>xxx-backup</strong></span>
+                            </div>
+                        </div>
+                        <div class="button-row">
+                            <button type="button" class="btn btn-primary" id="btnForceCheckout" style="background:var(--error);">执行强制检出</button>
+                        </div>
+                        <div class="button-row" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px;">
+                            <button type="button" class="btn btn-secondary" id="btnRestoreBackup" style="color:var(--success);border-color:var(--success);">还原 -backup 备份分支</button>
+                            <button type="button" class="btn btn-secondary" id="btnDeleteBackup" style="color:var(--warn);border-color:var(--warn);">清理 -backup 备份分支</button>
+                        </div>
+                    </div>
                 </form>
             </aside>
             <section class="panel panel-right">
@@ -80,6 +100,21 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <div class="modal-overlay" id="confirmModal" style="display:none">
+        <div class="modal" id="confirmModalBox">
+            <div class="modal-header">
+                <h2 id="confirmTitle">确认操作</h2>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage" style="font-size:13px;line-height:1.6;color:var(--text)"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="confirmCancel">取消</button>
+                <button class="btn" id="confirmOk">确认</button>
+            </div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="configModal" style="display:none">

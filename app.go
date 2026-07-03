@@ -358,6 +358,181 @@ func (a *App) GetRecentCommits(dirList []string, branch string, count int) []Pro
 	return result
 }
 
+func (a *App) ForceCheckoutBranch(dirList []string, sourceBranch string, targetBranch string) UpdateResult {
+	runtime.EventsEmit(a.ctx, "log", "MultiGit 强制检出")
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+	runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("源分支: %s  目标分支: %s", sourceBranch, targetBranch))
+	runtime.EventsEmit(a.ctx, "log", "")
+
+	successCount := 0
+	failCount := 0
+
+	for _, cwd := range dirList {
+		projectName := filepath.Base(cwd)
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("项目: %s (%s)", projectName, cwd))
+
+		oldBranch, err := git.CurrentBranch(cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取当前分支失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		isStash, err := git.Stash(a.ctx, cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("储藏失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		projectFailed := false
+		func() {
+			if err := git.SwitchOrCreate(a.ctx, cwd, sourceBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切换到源分支失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+			if err := git.Pull(a.ctx, cwd, sourceBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("拉取源分支失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+
+			backupName, err := git.BackupBranch(a.ctx, cwd, targetBranch)
+			if err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("备份目标分支失败: %s", err.Error()))
+			} else if backupName != "" {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("已创建备份分支: %s", backupName))
+			}
+
+			if err := git.ForceCheckoutTo(a.ctx, cwd, targetBranch, sourceBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("强制检出目标分支失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+
+			if err := git.ForcePush(a.ctx, cwd, targetBranch); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("强制推送失败: %s", err.Error()))
+				projectFailed = true
+				return
+			}
+
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("完成: %s", projectName))
+		}()
+
+		if projectFailed {
+			failCount++
+		} else {
+			successCount++
+		}
+
+		if err := git.SwitchOrCreate(a.ctx, cwd, oldBranch); err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切回原分支失败: %s", err.Error()))
+		}
+		if isStash {
+			git.StashPop(a.ctx, cwd)
+		}
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", "")
+	}
+
+	msg := fmt.Sprintf("完成: %d 成功, %d 失败", successCount, failCount)
+	runtime.EventsEmit(a.ctx, "log", msg)
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	return UpdateResult{OK: successCount > 0 || failCount == 0, Message: msg}
+}
+
+func (a *App) DeleteBackupBranches(dirList []string) UpdateResult {
+	runtime.EventsEmit(a.ctx, "log", "MultiGit 清理备份分支")
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	totalDeleted := 0
+	failCount := 0
+
+	for _, cwd := range dirList {
+		projectName := filepath.Base(cwd)
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("项目: %s (%s)", projectName, cwd))
+
+		deleted, err := git.DeleteBackupBranches(a.ctx, cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("清理失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+		if len(deleted) == 0 {
+			runtime.EventsEmit(a.ctx, "log", "没有找到备份分支")
+		} else {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("已删除 %d 个备份分支: %s", len(deleted), strings.Join(deleted, ", ")))
+			totalDeleted += len(deleted)
+		}
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", "")
+	}
+
+	msg := fmt.Sprintf("完成: 共删除 %d 个备份分支, %d 个项目失败", totalDeleted, failCount)
+	runtime.EventsEmit(a.ctx, "log", msg)
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	return UpdateResult{OK: true, Message: msg}
+}
+
+func (a *App) RestoreBackupBranches(dirList []string) UpdateResult {
+	runtime.EventsEmit(a.ctx, "log", "MultiGit 还原备份分支")
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	totalRestored := 0
+	failCount := 0
+
+	for _, cwd := range dirList {
+		projectName := filepath.Base(cwd)
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("项目: %s (%s)", projectName, cwd))
+
+		oldBranch, err := git.CurrentBranch(cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取当前分支失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		isStash, err := git.Stash(a.ctx, cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("储藏失败: %s", err.Error()))
+			failCount++
+			continue
+		}
+
+		restored, err := git.RestoreBackupBranches(a.ctx, cwd)
+		if err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("还原失败: %s", err.Error()))
+			failCount++
+		} else if len(restored) == 0 {
+			runtime.EventsEmit(a.ctx, "log", "没有找到备份分支")
+		} else {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("已还原 %d 个分支: %s", len(restored), strings.Join(restored, ", ")))
+			totalRestored += len(restored)
+		}
+
+		if err := git.SwitchOrCreate(a.ctx, cwd, oldBranch); err != nil {
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("切回原分支失败: %s", err.Error()))
+		}
+		if isStash {
+			git.StashPop(a.ctx, cwd)
+		}
+		runtime.EventsEmit(a.ctx, "log", "----------------------------------------")
+		runtime.EventsEmit(a.ctx, "log", "")
+	}
+
+	msg := fmt.Sprintf("完成: 共还原 %d 个分支, %d 个项目失败", totalRestored, failCount)
+	runtime.EventsEmit(a.ctx, "log", msg)
+	runtime.EventsEmit(a.ctx, "log", "========================================")
+
+	return UpdateResult{OK: true, Message: msg}
+}
+
 func (a *App) CherryPickCommits(dirList []string, sourceBranch string, selectedCommits map[string][]string, destBranch string) UpdateResult {
 	runtime.EventsEmit(a.ctx, "log", "MultiGit Cherry-Pick")
 	runtime.EventsEmit(a.ctx, "log", "========================================")

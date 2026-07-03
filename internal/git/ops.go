@@ -267,3 +267,135 @@ func PushBranch(ctx context.Context, cwd string, branch string) error {
 	runtime.EventsEmit(ctx, "log", "[git] 推送到 origin/"+branch+"...")
 	return command.Run(ctx, "git", []string{"push", "origin", branch}, cwd)
 }
+
+func ForcePush(ctx context.Context, cwd string, branch string) error {
+	runtime.EventsEmit(ctx, "log", "[git] 强制推送到 origin/"+branch+"...")
+	return command.Run(ctx, "git", []string{"push", "--force", "origin", branch}, cwd)
+}
+
+func ForceCheckoutTo(ctx context.Context, cwd string, targetBranch string, sourceRef string) error {
+	runtime.EventsEmit(ctx, "log", "[git] 强制检出分支: "+targetBranch+" -> "+sourceRef)
+	return command.Run(ctx, "git", []string{"checkout", "-B", targetBranch, sourceRef}, cwd)
+}
+
+func branchExistsLocal(cwd string, branch string) (bool, error) {
+	localBranches, err := listLocalBranches(cwd)
+	if err != nil {
+		return false, err
+	}
+	for _, b := range localBranches {
+		if b == branch {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func BackupBranch(ctx context.Context, cwd string, targetBranch string) (string, error) {
+	backupName := targetBranch + "-backup"
+
+	existsLocal, err := branchExistsLocal(cwd, targetBranch)
+	if err != nil {
+		return "", err
+	}
+	if existsLocal {
+		runtime.EventsEmit(ctx, "log", fmt.Sprintf("[git] 备份目标分支 %s -> %s", targetBranch, backupName))
+		err := command.Run(ctx, "git", []string{"branch", "-f", backupName, targetBranch}, cwd)
+		if err != nil {
+			return "", err
+		}
+		runtime.EventsEmit(ctx, "log", "[git] 备份完成")
+		return backupName, nil
+	}
+
+	remoteBranches, err := listRemoteBranches(cwd)
+	if err != nil {
+		return "", err
+	}
+	remoteFull := "origin/" + targetBranch
+	for _, b := range remoteBranches {
+		if b == remoteFull {
+			runtime.EventsEmit(ctx, "log", fmt.Sprintf("[git] 备份远程目标分支 %s -> %s", targetBranch, backupName))
+			err := command.Run(ctx, "git", []string{"branch", "-f", backupName, remoteFull}, cwd)
+			if err != nil {
+				return "", err
+			}
+			runtime.EventsEmit(ctx, "log", "[git] 备份完成")
+			return backupName, nil
+		}
+	}
+
+	return "", nil
+}
+
+func RestoreBackupBranches(ctx context.Context, cwd string) ([]string, error) {
+	localBranches, err := listLocalBranches(cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	var backupBranches []string
+	for _, b := range localBranches {
+		if strings.HasSuffix(b, "-backup") {
+			backupBranches = append(backupBranches, b)
+		}
+	}
+	if len(backupBranches) == 0 {
+		return nil, nil
+	}
+
+	var restored []string
+	for _, backup := range backupBranches {
+		original := strings.TrimSuffix(backup, "-backup")
+		runtime.EventsEmit(ctx, "log", fmt.Sprintf("[git] 还原: %s -> %s", backup, original))
+		if err := command.Run(ctx, "git", []string{"checkout", "-B", original, backup}, cwd); err != nil {
+			return restored, fmt.Errorf("还原 %s -> %s 失败: %w", backup, original, err)
+		}
+		runtime.EventsEmit(ctx, "log", "[git] 强制推送 "+original)
+		if err := command.Run(ctx, "git", []string{"push", "--force", "origin", original}, cwd); err != nil {
+			return restored, fmt.Errorf("推送 %s 失败: %w", original, err)
+		}
+		restored = append(restored, original+" <- "+backup)
+	}
+
+	return restored, nil
+}
+
+func DeleteBackupBranches(ctx context.Context, cwd string) ([]string, error) {
+	var deleted []string
+
+	localBranches, err := listLocalBranches(cwd)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range localBranches {
+		if strings.HasSuffix(b, "-backup") {
+			runtime.EventsEmit(ctx, "log", "[git] 删除本地备份分支: "+b)
+			err := command.Run(ctx, "git", []string{"branch", "-D", b}, cwd)
+			if err != nil {
+				runtime.EventsEmit(ctx, "log", "[git] 删除本地分支失败: "+b)
+				continue
+			}
+			deleted = append(deleted, b)
+		}
+	}
+
+	remoteBranches, err := listRemoteBranches(cwd)
+	if err != nil {
+		return deleted, err
+	}
+	for _, b := range remoteBranches {
+		trimmed := strings.TrimPrefix(b, "origin/")
+		if strings.HasSuffix(trimmed, "-backup") {
+			runtime.EventsEmit(ctx, "log", "[git] 删除远程备份分支: "+trimmed)
+			err := command.Run(ctx, "git", []string{"push", "origin", "--delete", trimmed}, cwd)
+			if err != nil {
+				runtime.EventsEmit(ctx, "log", "[git] 删除远程分支失败: "+trimmed)
+				continue
+			}
+			deleted = append(deleted, "origin/"+trimmed)
+		}
+	}
+
+	return deleted, nil
+}

@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, CherryPickCommits } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -35,6 +35,45 @@ function logError(text) {
     terminal.scrollTop = terminal.scrollHeight;
 }
 
+function showConfirm({ title, message, confirmText, cancelText, variant }) {
+    return new Promise((resolve) => {
+        const overlay = $('#confirmModal');
+        const box = $('#confirmModalBox');
+        const titleEl = $('#confirmTitle');
+        const msgEl = $('#confirmMessage');
+        const okBtn = $('#confirmOk');
+        const cancelBtn = $('#confirmCancel');
+
+        titleEl.textContent = title || '确认操作';
+        msgEl.innerHTML = message;
+        okBtn.textContent = confirmText || '确认';
+        cancelBtn.textContent = cancelText || '取消';
+
+        okBtn.className = 'btn';
+        if (variant === 'danger') okBtn.classList.add('btn-danger');
+        else if (variant === 'warning') okBtn.classList.add('btn-warning');
+        else if (variant === 'success') okBtn.classList.add('btn-success');
+        else okBtn.classList.add('btn-primary');
+
+        const cleanup = () => {
+            overlay.style.display = 'none';
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            overlay.removeEventListener('click', onOverlay);
+        };
+
+        const onOk = () => { cleanup(); resolve(true); };
+        const onCancel = () => { cleanup(); resolve(false); };
+        const onOverlay = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
+
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        overlay.addEventListener('click', onOverlay);
+
+        overlay.style.display = 'flex';
+    });
+}
+
 EventsOn('log', (text) => {
     log(text);
 });
@@ -64,14 +103,19 @@ function switchMode(mode) {
 
     $$('.tab').forEach(t => t.classList.toggle('tab-active', t.dataset.mode === mode));
 
+    $('#updateSection').style.display = 'none';
+    $('#cherrypickSection').style.display = 'none';
+    $('#forcecheckoutSection').style.display = 'none';
+
     if (mode === 'update') {
         $('#branchLabel').textContent = '目标分支';
         $('#updateSection').style.display = '';
-        $('#cherrypickSection').style.display = 'none';
+    } else if (mode === 'cherrypick') {
+        $('#branchLabel').textContent = '源分支';
+        $('#cherrypickSection').style.display = '';
     } else {
         $('#branchLabel').textContent = '源分支';
-        $('#updateSection').style.display = 'none';
-        $('#cherrypickSection').style.display = '';
+        $('#forcecheckoutSection').style.display = '';
     }
 }
 
@@ -281,6 +325,133 @@ function renderCommitList(projectCommits) {
     });
 }
 
+async function onForceCheckout() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const sourceBranch = $('#branch').value;
+    if (!sourceBranch) {
+        logError('请选择源分支');
+        return;
+    }
+
+    const targetBranch = $('#fcTargetBranch').value.trim();
+    if (!targetBranch) {
+        logError('请输入目标分支名');
+        return;
+    }
+
+    const projectNames = Array.from($$('.proj-checkbox:checked')).map(cb => cb.dataset.name);
+    const projectList = projectNames.map(n => `&nbsp;&nbsp;• ${escapeHtml(n)}`).join('<br>');
+
+    const ok = await showConfirm({
+        title: '强制检出',
+        message: `确定要将以下 <strong>${projectNames.length}</strong> 个项目的分支 <strong>${escapeHtml(targetBranch)}</strong> 强制重置为 <strong>${escapeHtml(sourceBranch)}</strong> 的最新状态吗？<br><br>${projectList}<br><br>目标分支存在时将自动备份为 <strong>${escapeHtml(targetBranch)}-backup</strong>，可通过「还原 -backup 备份分支」恢复。`,
+        confirmText: '执行强制检出',
+        variant: 'danger',
+    });
+    if (!ok) return;
+
+    terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+
+    const btn = $('#btnForceCheckout');
+    btn.disabled = true;
+    btn.textContent = '执行中...';
+
+    try {
+        const result = await ForceCheckoutBranch(selectedProjects, sourceBranch, targetBranch);
+        if (!result.ok) {
+            logError(result.message);
+        }
+    } catch (e) {
+        logError('执行出错: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '执行强制检出';
+    }
+}
+
+async function onDeleteBackupBranches() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const projectNames = Array.from($$('.proj-checkbox:checked')).map(cb => cb.dataset.name);
+    const projectList = projectNames.map(n => `&nbsp;&nbsp;• ${escapeHtml(n)}`).join('<br>');
+
+    const ok = await showConfirm({
+        title: '清理备份分支',
+        message: `确定要删除以下项目中所有 <strong>-backup</strong> 结尾的备份分支吗？<br><br>${projectList}<br><br><span style="color:var(--warn)">本地和远程将同时删除</span>`,
+        confirmText: '确认删除',
+        variant: 'warning',
+    });
+    if (!ok) return;
+
+    terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+
+    const btn = $('#btnDeleteBackup');
+    btn.disabled = true;
+    btn.textContent = '清理中...';
+
+    try {
+        const result = await DeleteBackupBranches(selectedProjects);
+        if (result.ok) {
+            log(result.message);
+        } else {
+            logError(result.message);
+        }
+    } catch (e) {
+        logError('执行出错: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '清理 -backup 备份分支';
+    }
+}
+
+async function onRestoreBackupBranches() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const projectNames = Array.from($$('.proj-checkbox:checked')).map(cb => cb.dataset.name);
+    const projectList = projectNames.map(n => `&nbsp;&nbsp;• ${escapeHtml(n)}`).join('<br>');
+
+    const ok = await showConfirm({
+        title: '还原备份分支',
+        message: `确定要将已选项目中的 <strong>-backup</strong> 备份分支还原到原分支吗？<br><br>${projectList}<br><br><span style="color:var(--warn)">将强制重置原分支为备份分支状态并强制推送！</span>`,
+        confirmText: '确认还原',
+        variant: 'success',
+    });
+    if (!ok) return;
+
+    terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+
+    const btn = $('#btnRestoreBackup');
+    btn.disabled = true;
+    btn.textContent = '还原中...';
+
+    try {
+        const result = await RestoreBackupBranches(selectedProjects);
+        if (result.ok) {
+            log(result.message);
+        } else {
+            logError(result.message);
+        }
+    } catch (e) {
+        logError('执行出错: ' + e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '还原 -backup 备份分支';
+    }
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -391,6 +562,9 @@ $$('.tab').forEach(tab => {
 });
 $('#btnFetchCommits').addEventListener('click', onFetchCommits);
 $('#btnCherryPick').addEventListener('click', onCherryPick);
+$('#btnForceCheckout').addEventListener('click', onForceCheckout);
+$('#btnRestoreBackup').addEventListener('click', onRestoreBackupBranches);
+$('#btnDeleteBackup').addEventListener('click', onDeleteBackupBranches);
 
 $('#btnMinimize').addEventListener('click', () => WindowMinimise());
 $('#btnMaximize').addEventListener('click', () => {
