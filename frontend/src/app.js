@@ -81,6 +81,9 @@ EventsOn('log', (text) => {
 async function loadAndApplyConfig() {
     try {
         config = await LoadConfig();
+        if (config.packageVersionCache) {
+            Object.entries(config.packageVersionCache).forEach(([k, v]) => versionInputCache.set(k, v));
+        }
         applyConfigToUI();
         if (config.rootPath) {
             $('#rootPath').value = config.rootPath;
@@ -156,9 +159,12 @@ function onPackageChange() {
             </div>`
         ).join('');
 
+    const pkgVersions = config.packageVersions || {};
     $$('.pkg-version').forEach(input => {
         if (versionInputCache.has(input.dataset.pkg)) {
             input.value = versionInputCache.get(input.dataset.pkg);
+        } else if (pkgVersions[input.dataset.pkg]) {
+            input.value = pkgVersions[input.dataset.pkg];
         }
     });
 }
@@ -235,7 +241,8 @@ async function onSubmit(e) {
     try {
         const result = await UpdatePackage(selectedProjects, packages, branch);
         if (result.ok) {
-            // 成功消息已通过 EventsOn('log') 事件监听器显示，无需重复打印
+            config.packageVersionCache = Object.fromEntries(versionInputCache);
+            await SaveConfig(config);
         } else {
             logError(result.message);
         }
@@ -522,7 +529,8 @@ async function onCherryPick() {
 function openConfig() {
     $('#cfgRegistry').value = config.registry || '';
     $('#cfgBranches').value = (config.branches || []).join(', ');
-    $('#cfgPackages').value = (config.packages || []).join(', ');
+    const pkgVersions = config.packageVersions || {};
+    $('#cfgPackages').value = (config.packages || []).map(p => pkgVersions[p] ? `${p}@${pkgVersions[p]}` : p).join(', ');
     $('#cfgAutoBump').value = (config.autoBumpProjects || []).join(', ');
     $('#cfgCommitCount').value = config.commitCount || 5;
     $('#configModal').style.display = 'flex';
@@ -535,7 +543,23 @@ function closeConfig() {
 async function saveConfig() {
     config.registry = $('#cfgRegistry').value.trim();
     config.branches = $('#cfgBranches').value.split(',').map(s => s.trim()).filter(Boolean);
-    config.packages = $('#cfgPackages').value.split(',').map(s => s.trim()).filter(Boolean);
+    const parsedPkgs = [];
+    const parsedVersions = {};
+    $('#cfgPackages').value.split(',').map(s => s.trim()).filter(Boolean).forEach(token => {
+        const idx = token.indexOf('@');
+        if (idx > 0) {
+            const name = token.slice(0, idx).trim();
+            const version = token.slice(idx + 1).trim();
+            if (name) {
+                parsedPkgs.push(name);
+                if (version) parsedVersions[name] = version;
+            }
+        } else if (token) {
+            parsedPkgs.push(token);
+        }
+    });
+    config.packages = parsedPkgs;
+    config.packageVersions = parsedVersions;
     config.autoBumpProjects = $('#cfgAutoBump').value.split(',').map(s => s.trim()).filter(Boolean);
     config.commitCount = parseInt($('#cfgCommitCount').value) || 5;
 

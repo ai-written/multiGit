@@ -82,7 +82,8 @@ build.bat
 |------|------|
 | `registry` | npm 镜像源地址 |
 | `branches` | 可选的分支列表 |
-| `packages` | 常用包名（勾选后填版本号） |
+| `packages` | 常用包名 |
+| `packageVersions` | 包的默认版本号映射，如 `{"lodash": "4.0.0"}`，设置中可写 `lodash@4.0.0` 格式 |
 | `autoBumpProjects` | 需要自动升版本号的项目目录名 |
 | `rootPath` | 上次使用的项目根目录（自动记忆） |
 | `updateRepo` | GitHub 仓库 `user/repo`，用于版本更新检查（留空禁用） |
