@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, GetRecentCommitsPage, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches, GetCommitFiles, GetCommitFileDiffSideBySide, SearchHistoryCommitsPage, ListProjectBranches } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -9,11 +9,10 @@ const terminal = $('#terminalContent');
 
 const versionInputCache = new Map();
 
-let currentMode = 'update';
+let currentMode = 'history';
 
 let config = {
     registry: 'https://registry.npmmirror.com',
-    branches: ['main', 'develop'],
     packages: [],
     autoBumpProjects: [],
     rootPath: '',
@@ -95,20 +94,20 @@ async function loadAndApplyConfig() {
 }
 
 function applyConfigToUI() {
-    const branchSel = $('#branch');
-    branchSel.innerHTML = config.branches.map(b => `<option value="${b}">${b}</option>`).join('');
-
     renderPackageList();
 }
 
 function switchMode(mode) {
     currentMode = mode;
 
-    $$('.tab').forEach(t => t.classList.toggle('tab-active', t.dataset.mode === mode));
+    $('.tab-bar').querySelectorAll('.tab').forEach(t => t.classList.toggle('tab-active', t.dataset.mode === mode));
 
     $('#updateSection').style.display = 'none';
     $('#cherrypickSection').style.display = 'none';
     $('#forcecheckoutSection').style.display = 'none';
+    $('#historySection').style.display = 'none';
+    $('#terminal').style.display = '';
+    $('#historyPanel').style.display = 'none';
 
     if (mode === 'update') {
         $('#branchLabel').textContent = '目标分支';
@@ -116,6 +115,11 @@ function switchMode(mode) {
     } else if (mode === 'cherrypick') {
         $('#branchLabel').textContent = '源分支';
         $('#cherrypickSection').style.display = '';
+    } else if (mode === 'history') {
+        $('#branchLabel').textContent = '分支';
+        $('#historySection').style.display = '';
+        $('#terminal').style.display = 'none';
+        $('#historyPanel').style.display = 'flex';
     } else {
         $('#branchLabel').textContent = '源分支';
         $('#forcecheckoutSection').style.display = '';
@@ -193,6 +197,9 @@ async function loadProjects(rootPath) {
                 <span>${p.name}</span>
             </label>`
         ).join('');
+        list.querySelectorAll('.proj-checkbox').forEach(cb => {
+            cb.addEventListener('change', () => refreshBranches());
+        });
     } catch (e) {
         logError('项目列表加载失败: ' + e);
     }
@@ -328,6 +335,465 @@ function renderCommitList(projectCommits) {
             const toggle = h.querySelector('.commit-project-toggle');
             body.classList.toggle('hidden');
             toggle.classList.toggle('collapsed');
+        });
+    });
+}
+
+function setHistoryMsg(text, type) {
+    const msg = $('#historyPanelMsg');
+    if (!text) { msg.style.display = 'none'; return; }
+    const color = type === 'error' ? 'var(--error)' : type === 'warn' ? 'var(--warn)' : 'var(--success)';
+    msg.style.display = 'block';
+    msg.style.background = type === 'error' ? 'rgba(239,68,68,0.1)' : type === 'warn' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+    msg.style.color = color;
+    msg.style.border = '1px solid ' + color;
+    msg.textContent = text;
+}
+
+async function refreshBranches() {
+    const selected = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    const branchSel = $('#branch');
+    if (selected.length === 0) {
+        branchSel.innerHTML = '<option value="">— 请选择项目 —</option>';
+        return;
+    }
+    try {
+        const resp = await ListProjectBranches(selected);
+        const current = branchSel.value;
+        const options = (resp.allBranches || []).map(b => {
+            const count = (resp.branchCounts || {})[b] || 0;
+            const label = count === resp.totalProjects ? b : `${b} (${count}/${resp.totalProjects})`;
+            return `<option value="${b}">${label}</option>`;
+        }).join('');
+        if (options) {
+            branchSel.innerHTML = options;
+            if (current && resp.allBranches.includes(current)) {
+                branchSel.value = current;
+            }
+        }
+    } catch (e) {}
+}
+
+async function onFetchHistory() {
+    const selectedProjects = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    if (selectedProjects.length === 0) {
+        logError('请至少选择一个项目');
+        return;
+    }
+
+    const branch = $('#branch').value;
+    if (!branch) {
+        logError('请选择分支');
+        return;
+    }
+
+    const btn = $('#btnFetchHistory');
+    btn.disabled = true;
+    btn.textContent = '获取中...';
+
+    try {
+        const pageSize = config.commitCount * 10;
+        const searchPageSize = pageSize;
+        const firstPage = await GetRecentCommitsPage(selectedProjects, branch, pageSize, 0);
+        if (firstPage && firstPage.length > 0) {
+            showHistoryPanel(selectedProjects, branch, pageSize, searchPageSize, firstPage);
+            setHistoryMsg('');
+        } else {
+            setHistoryMsg('没有获取到提交记录', 'warn');
+        }
+    } catch (e) {
+        setHistoryMsg('获取提交记录失败: ' + e, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '获取提交';
+    }
+}
+
+function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstPage) {
+    const tabs = $('#historyPanelTabs');
+    let content = $('#historyPanelContent');
+    const searchInput = $('#historyPanelSearch');
+
+    // 移除旧监听器：替换 content 元素
+    const newContent = content.cloneNode(false);
+    content.parentNode.replaceChild(newContent, content);
+    content = newContent;
+    tabs.innerHTML = '';
+    searchInput.value = '';
+    setHistoryMsg('');
+
+    const s = {
+        allCommits: new Map(),
+        loading: false,
+        currentTabIndex: 0,
+        isSearchMode: false,
+        searchResults: new Map(),
+        lastSearchTerm: '',
+    };
+
+    let projectSkip = {};
+    let projectAllLoaded = {};
+    let projectSearchSkip = {};
+    let projectSearchAllLoaded = {};
+
+    function curPath() { return projectPaths[s.currentTabIndex]; }
+    function getSkip() { return projectSkip[curPath()] || 0; }
+    function incSkip(d) { projectSkip[curPath()] = getSkip() + d; }
+    function isAllLoaded() { return !!projectAllLoaded[curPath()]; }
+    function setAllLoaded(v) { projectAllLoaded[curPath()] = v !== false; }
+    function getSearchSkip() { return projectSearchSkip[curPath()] || 0; }
+    function setSearchSkip(v) { projectSearchSkip[curPath()] = v; }
+    function incSearchSkip(d) { projectSearchSkip[curPath()] = getSearchSkip() + d; }
+    function isSearchAllLoaded() { return !!projectSearchAllLoaded[curPath()]; }
+    function setSearchAllLoaded(v) { projectSearchAllLoaded[curPath()] = v !== false; }
+
+    let savedScrollTops = {};
+
+    firstPage.forEach(pc => {
+        s.allCommits.set(pc.project_path, [...pc.commits]);
+    });
+
+    function updateTabCounts(primarySource) {
+        tabs.querySelectorAll('.tab').forEach(tab => {
+            const idx = parseInt(tab.dataset.projectIndex);
+            const path = projectPaths[idx];
+            const count = primarySource.has(path) 
+                ? (primarySource.get(path) || []).length 
+                : (s.allCommits.get(path) || []).length;
+            const name = firstPage.find(p => p.project_path === path)?.project_name || path.split('/').pop();
+            tab.innerHTML = `${escapeHtml(name)} (<span class="tab-count">${count}</span>)`;
+        });
+    }
+
+    function renderProjectCommits(commits, projectPath) {
+        const isSearch = s.isSearchMode;
+        const loaded = isSearch ? isSearchAllLoaded() : isAllLoaded();
+        const hasMore = !loaded && !s.loading;
+
+        content.innerHTML = commits.map(c =>
+            `<div class="commit-item" data-hash="${c.hash}" data-project="${escapeHtml(projectPath)}" style="padding:4px 8px;flex-direction:column">
+                <div style="width:100%;display:flex;align-items:center;gap:4px;font-size:12px">
+                    <span class="commit-toggle" style="flex-shrink:0;width:14px;text-align:center;color:var(--text-muted);font-size:10px">▶</span>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
+                    <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
+                </div>
+                <div class="commit-files" style="display:none;padding:2px 0 2px 18px;width:100%;font-size:11px;font-family:var(--font-mono);line-height:1.8"></div>
+            </div>`
+        ).join('') || '<div style="padding:8px;color:var(--text-muted);font-size:12px">没有提交记录</div>';
+
+        if (hasMore) {
+            const indicator = document.createElement('div');
+            indicator.className = 'scroll-loading';
+            indicator.style.cssText = 'padding:8px;text-align:center;color:var(--text-muted);font-size:12px';
+            indicator.textContent = '加载更多...';
+            content.appendChild(indicator);
+        } else if (loaded && commits.length > 0) {
+            const end = document.createElement('div');
+            end.style.cssText = 'padding:8px;text-align:center;color:var(--text-muted);font-size:11px';
+            end.textContent = isSearch ? '— 搜索结果已全部加载 —' : '— 已显示全部 —';
+            content.appendChild(end);
+        }
+
+        content.querySelectorAll('.commit-item > div:first-child').forEach(row => {
+            row.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const item = row.closest('.commit-item');
+                const filesDiv = item.querySelector('.commit-files');
+                if (filesDiv.style.display === 'none') {
+                    if (!filesDiv.dataset.loaded) {
+                        filesDiv.innerHTML = '<div class="diff-spinner"></div>';
+                        try {
+                            const files = await GetCommitFiles(item.dataset.project, item.dataset.hash);
+                            if (files && files.length > 0) {
+                                filesDiv.innerHTML = files.map(f => {
+                                    const color = f.status === 'A' ? 'var(--success)' : f.status === 'M' ? 'var(--primary)' : 'var(--error)';
+                                    return `<div class="file-item" data-file="${escapeHtml(f.filePath)}">
+                                        <span class="file-toggle" style="cursor:pointer">▶ </span><span style="color:${color};margin-right:8px">${f.status}</span><span class="file-path" style="cursor:pointer">${escapeHtml(f.filePath)}</span>
+                                        <div class="file-diff" style="display:none;padding:4px 0;font-size:11px;line-height:1.6;white-space:pre;overflow-x:auto;user-select:text"></div>
+                                    </div>`;
+                                }).join('');
+                                filesDiv.querySelectorAll('.file-item').forEach(el => {
+                                    function createDiffRow(container, num, content, isDel, isAdd) {
+                                        const row = document.createElement('div');
+                                        row.className = 'diff-row';
+                                        const n = document.createElement('span');
+                                        n.className = 'diff-num';
+                                        n.textContent = num > 0 ? String(num) : '';
+                                        const c = document.createElement('span');
+                                        c.className = 'diff-content' + (isDel ? ' diff-content-del' : '') + (isAdd ? ' diff-content-add' : '');
+                                        c.textContent = content;
+                                        row.appendChild(n);
+                                        row.appendChild(c);
+                                        container.appendChild(row);
+                                    }
+
+                                    function renderSideBySide(hunks) {
+                                        const container = document.createElement('div');
+                                        container.className = 'diff-container';
+                                        let syncing = false;
+
+                                        const header = document.createElement('div');
+                                        header.className = 'diff-header';
+                                        ['旧文件', '新文件'].forEach((text, i) => {
+                                            const col = document.createElement('div');
+                                            col.className = 'diff-header-col';
+                                            col.textContent = text;
+                                            header.appendChild(col);
+                                        });
+                                        container.appendChild(header);
+
+                                        const scrollWrapper = document.createElement('div');
+                                        scrollWrapper.className = 'diff-scrollwrap';
+
+                                        const leftWrap = document.createElement('div');
+                                        leftWrap.className = 'diff-col';
+                                        const rightWrap = document.createElement('div');
+                                        rightWrap.className = 'diff-col';
+
+                                        const left = document.createElement('div');
+                                        const right = document.createElement('div');
+                                        leftWrap.appendChild(left);
+                                        rightWrap.appendChild(right);
+
+                                        let firstHunk = true;
+                                        hunks.forEach(hunk => {
+                                            if (!firstHunk) {
+                                                const oldEnd = hunk.lines[0].oldNum + hunk.lines.filter(l => l.type !== 'add').length - 1;
+                                                const newEnd = hunk.lines[0].newNum + hunk.lines.filter(l => l.type !== 'delete').length - 1;
+                                                const sepL = document.createElement('div');
+                                                sepL.className = 'diff-sep';
+                                                sepL.textContent = '... ' + hunk.lines[0].oldNum + '-' + oldEnd;
+                                                left.appendChild(sepL);
+                                                const sepR = document.createElement('div');
+                                                sepR.className = 'diff-sep';
+                                                sepR.textContent = '... ' + hunk.lines[0].newNum + '-' + newEnd;
+                                                right.appendChild(sepR);
+                                            }
+                                            firstHunk = false;
+
+                                            hunk.lines.forEach(dl => {
+                                                if (dl.type === 'context') {
+                                                    createDiffRow(left, dl.oldNum, dl.oldLine);
+                                                    createDiffRow(right, dl.newNum, dl.newLine);
+                                                } else if (dl.type === 'delete') {
+                                                    createDiffRow(left, dl.oldNum, dl.oldLine, true);
+                                                    createDiffRow(right, 0, '', false, false);
+                                                } else if (dl.type === 'add') {
+                                                    createDiffRow(left, 0, '');
+                                                    createDiffRow(right, dl.newNum, dl.newLine, false, true);
+                                                }
+                                            });
+                                        });
+
+                                        leftWrap.addEventListener('scroll', () => {
+                                            if (syncing) return; syncing = true;
+                                            rightWrap.scrollTop = leftWrap.scrollTop;
+                                            syncing = false;
+                                        });
+                                        rightWrap.addEventListener('scroll', () => {
+                                            if (syncing) return; syncing = true;
+                                            leftWrap.scrollTop = rightWrap.scrollTop;
+                                            syncing = false;
+                                        });
+
+                                        scrollWrapper.appendChild(leftWrap);
+                                        scrollWrapper.appendChild(rightWrap);
+                                        container.appendChild(scrollWrapper);
+                                        return container;
+                                    }
+
+                                    async function toggleFileDiff(e) {
+                                        const diffDiv = el.querySelector('.file-diff');
+                                        const toggle = el.querySelector('.file-toggle');
+                                        if (diffDiv.style.display === 'none') {
+                                            if (!diffDiv.dataset.loaded) {
+                                                diffDiv.innerHTML = '<div class="diff-spinner"></div>';
+                                                try {
+                                                    const resp = await GetCommitFileDiffSideBySide(item.dataset.project, item.dataset.hash, el.dataset.file);
+                                                    if (resp.tooLarge) {
+                                                        diffDiv.innerHTML = '<div style="padding:12px;text-align:center;color:var(--warn);font-size:12px">⚠ 文件过大，已跳过 diff 加载</div>';
+                                                    } else if (resp.hunks && resp.hunks.length > 0) {
+                                                        diffDiv.innerHTML = '';
+                                                        diffDiv.appendChild(renderSideBySide(resp.hunks));
+                                                    } else {
+                                                        diffDiv.innerHTML = '<div style="padding:8px;text-align:center;color:var(--text-muted);font-size:11px">(无差异)</div>';
+                                                    }
+                                                    diffDiv.dataset.loaded = '1';
+                                                } catch (e) {
+                                                    diffDiv.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:11px">获取失败</div>';
+                                                }
+                                            }
+                                            diffDiv.style.display = '';
+                                            toggle.textContent = '▼ ';
+                                        } else {
+                                            diffDiv.style.display = 'none';
+                                            toggle.textContent = '▶ ';
+                                        }
+                                    }
+                                    el.addEventListener('click', (e) => {
+                                        e.stopPropagation();
+                                        if (e.target.closest('.file-diff')) return;
+                                        toggleFileDiff(e);
+                                    });
+                                });
+                            } else {
+                                filesDiv.innerHTML = '<span style="color:var(--text-muted)">(无文件变更)</span>';
+                            }
+                            filesDiv.dataset.loaded = '1';
+                        } catch (e) {
+                            filesDiv.innerHTML = '<span style="color:var(--error)">获取失败</span>';
+                        }
+                    }
+                    filesDiv.style.display = '';
+                    row.querySelector('.commit-toggle').textContent = '▼';
+                } else {
+                    filesDiv.style.display = 'none';
+                    row.querySelector('.commit-toggle').textContent = '▶';
+                }
+            });
+        });
+    }
+
+    async function loadMore() {
+        if (s.loading) return;
+        if (s.isSearchMode && isSearchAllLoaded()) return;
+        if (!s.isSearchMode && isAllLoaded()) return;
+
+        s.loading = true;
+        const indicator = content.querySelector('.scroll-loading');
+        if (indicator) indicator.textContent = '加载中...';
+
+        if (s.isSearchMode) {
+            incSearchSkip(searchPageSize);
+            try {
+                const currentPath = projectPaths[s.currentTabIndex];
+                const searchResp = await SearchHistoryCommitsPage([currentPath], branch, s.lastSearchTerm, searchPageSize, getSearchSkip());
+                setSearchAllLoaded(!searchResp.hasMore);
+                (searchResp.results || []).forEach(pc => {
+                    const existing = s.searchResults.get(pc.project_path) || [];
+                    s.searchResults.set(pc.project_path, existing.concat(pc.commits));
+                });
+                renderProjectCommits(s.searchResults.get(currentPath) || [], currentPath);
+                updateTabCounts(s.searchResults);
+            } catch (e) {
+                setSearchAllLoaded(true);
+            }
+        } else {
+            incSkip(pageSize);
+            try {
+                const currentPath = projectPaths[s.currentTabIndex];
+                const nextPage = await GetRecentCommitsPage([currentPath], branch, pageSize, getSkip());
+                if (!nextPage || nextPage.length === 0 || nextPage.every(pc => pc.commits.length === 0)) {
+                    setAllLoaded(true);
+                } else {
+                    nextPage.forEach(pc => {
+                        const existing = s.allCommits.get(pc.project_path) || [];
+                        s.allCommits.set(pc.project_path, existing.concat(pc.commits));
+                    });
+                    renderProjectCommits(s.allCommits.get(currentPath) || [], currentPath);
+                    updateTabCounts(s.allCommits);
+                }
+            } catch (e) {
+                setAllLoaded(true);
+            }
+        }
+        s.loading = false;
+    }
+
+    async function fillContent() {
+        if (!s.loading && !isAllLoaded() && content.scrollHeight <= content.clientHeight + 50) {
+            await loadMore();
+        }
+    }
+
+    content.addEventListener('scroll', () => {
+        if (content.scrollTop + content.clientHeight >= content.scrollHeight - 150) {
+            loadMore();
+        }
+    });
+
+    let searchTimeout;
+
+    async function triggerSearch(term) {
+        if (!term) return;
+        s.isSearchMode = true;
+        setSearchSkip(0);
+        setSearchAllLoaded(false);
+        s.lastSearchTerm = term;
+        content.innerHTML = '<div class="diff-spinner"></div><div style="padding:4px;text-align:center;color:var(--text-muted);font-size:12px">搜索中...</div>';
+        try {
+            const currentPath = projectPaths[s.currentTabIndex];
+            const searchResp = await SearchHistoryCommitsPage([currentPath], branch, term, searchPageSize, 0);
+            setSearchAllLoaded(!searchResp.hasMore);
+            const totalCount = (searchResp.results || []).reduce((sum, pc) => sum + pc.commits.length, 0);
+            (searchResp.results || []).forEach(pc => {
+                s.searchResults.set(pc.project_path, pc.commits);
+            });
+            renderProjectCommits(s.searchResults.get(currentPath) || [], currentPath);
+            updateTabCounts(s.searchResults);
+            if (isSearchAllLoaded() && totalCount > 0) {
+                setHistoryMsg(`共 ${totalCount} 条匹配结果`, '');
+            }
+        } catch (e) {
+            content.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">搜索失败</div>';
+        }
+    }
+
+    searchInput.addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        const term = searchInput.value.trim();
+        if (term) {
+            searchTimeout = setTimeout(() => triggerSearch(term), 300);
+        } else {
+            s.isSearchMode = false;
+            setSearchSkip(0);
+            setSearchAllLoaded(false);
+            s.searchResults = new Map();
+            s.lastSearchTerm = '';
+            setHistoryMsg('');
+            renderProjectCommits(s.allCommits.get(projectPaths[s.currentTabIndex]) || [], projectPaths[s.currentTabIndex]);
+        }
+    });
+
+    renderProjectCommits(s.allCommits.get(projectPaths[0]) || [], projectPaths[0]);
+    setTimeout(() => fillContent(), 200);
+
+    tabs.innerHTML = projectPaths.map((path, i) => {
+        const pc = firstPage.find(p => p.project_path === path);
+        return `<button type="button" class="tab ${i === 0 ? 'tab-active' : ''}" data-project-index="${i}">${escapeHtml(pc ? pc.project_name : path.split('/').pop())} (${(s.allCommits.get(path) || []).length})</button>`;
+    }).join('');
+
+    tabs.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            savedScrollTops[curPath()] = content.scrollTop;
+
+            tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
+            tab.classList.add('tab-active');
+            s.currentTabIndex = parseInt(tab.dataset.projectIndex);
+
+            const term = searchInput.value.trim();
+            setHistoryMsg('');
+
+            if (term) {
+                if (s.searchResults.has(curPath())) {
+                    renderProjectCommits(s.searchResults.get(curPath()) || [], curPath());
+                } else {
+                    triggerSearch(term);
+                }
+            } else {
+                s.isSearchMode = false;
+                setSearchSkip(0);
+                setSearchAllLoaded(false);
+                s.searchResults = new Map();
+                s.lastSearchTerm = '';
+                renderProjectCommits(s.allCommits.get(curPath()) || [], curPath());
+            }
+
+            setTimeout(() => {
+                if (!term) fillContent();
+                const saved = savedScrollTops[curPath()];
+                if (saved !== undefined) content.scrollTop = saved;
+            }, 200);
         });
     });
 }
@@ -528,7 +994,6 @@ async function onCherryPick() {
 
 function openConfig() {
     $('#cfgRegistry').value = config.registry || '';
-    $('#cfgBranches').value = (config.branches || []).join(', ');
     const pkgVersions = config.packageVersions || {};
     $('#cfgPackages').value = (config.packages || []).map(p => pkgVersions[p] ? `${p}@${pkgVersions[p]}` : p).join(', ');
     $('#cfgAutoBump').value = (config.autoBumpProjects || []).join(', ');
@@ -542,7 +1007,6 @@ function closeConfig() {
 
 async function saveConfig() {
     config.registry = $('#cfgRegistry').value.trim();
-    config.branches = $('#cfgBranches').value.split(',').map(s => s.trim()).filter(Boolean);
     const parsedPkgs = [];
     const parsedVersions = {};
     $('#cfgPackages').value.split(',').map(s => s.trim()).filter(Boolean).forEach(token => {
@@ -589,6 +1053,15 @@ $('#btnCherryPick').addEventListener('click', onCherryPick);
 $('#btnForceCheckout').addEventListener('click', onForceCheckout);
 $('#btnRestoreBackup').addEventListener('click', onRestoreBackupBranches);
 $('#btnDeleteBackup').addEventListener('click', onDeleteBackupBranches);
+$('#btnFetchHistory').addEventListener('click', onFetchHistory);
+$('#historyPanelContent').addEventListener('dblclick', (e) => {
+    const item = e.target.closest('.commit-item');
+    if (item && item.dataset.hash) {
+        navigator.clipboard.writeText(item.dataset.hash);
+        item.style.outline = '2px solid var(--primary)';
+        setTimeout(() => item.style.outline = '', 600);
+    }
+});
 
 $('#btnMinimize').addEventListener('click', () => WindowMinimise());
 $('#btnMaximize').addEventListener('click', () => {
@@ -624,6 +1097,7 @@ async function updateMaximizeIcon() {
 }
 
 updateMaximizeIcon();
+switchMode(currentMode);
 loadAndApplyConfig();
 
 async function checkUpdate() {

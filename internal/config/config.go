@@ -7,28 +7,26 @@ import (
 )
 
 type Config struct {
-	Registry         string            `json:"registry"`
-	Branches         []string          `json:"branches"`
-	Packages         []string          `json:"packages"`
-	PackageVersions   map[string]string `json:"packageVersions"`
+	Registry            string            `json:"registry"`
+	Packages            []string          `json:"packages"`
+	PackageVersions     map[string]string `json:"packageVersions"`
 	PackageVersionCache map[string]string `json:"packageVersionCache"`
-	AutoBumpProjects  []string          `json:"autoBumpProjects"`
-	RootPath         string            `json:"rootPath"`
-	UpdateRepo       string            `json:"updateRepo"`
-	CommitCount      int               `json:"commitCount"`
+	AutoBumpProjects    []string          `json:"autoBumpProjects"`
+	RootPath            string            `json:"rootPath"`
+	UpdateRepo          string            `json:"updateRepo"`
+	CommitCount         int               `json:"commitCount"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Registry:         "https://registry.npmmirror.com",
-		Branches:         []string{"main", "develop"},
-		Packages:         []string{},
-		PackageVersions:    map[string]string{},
+		Registry:            "https://registry.npmmirror.com",
+		Packages:            []string{},
+		PackageVersions:     map[string]string{},
 		PackageVersionCache: map[string]string{},
-		AutoBumpProjects:   []string{},
-		RootPath:         "",
-		UpdateRepo:       "ai-written/multiGit",
-		CommitCount:      5,
+		AutoBumpProjects:    []string{},
+		RootPath:            "",
+		UpdateRepo:          "ai-written/multiGit",
+		CommitCount:         5,
 	}
 }
 
@@ -78,9 +76,6 @@ func Load() (Config, error) {
 
 	if cfg.Registry == "" {
 		cfg.Registry = "https://registry.npmmirror.com"
-	}
-	if cfg.Branches == nil {
-		cfg.Branches = []string{"main", "develop"}
 	}
 	if cfg.Packages == nil {
 		cfg.Packages = []string{}

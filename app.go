@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sort"
 	"syscall"
 	"time"
 	"unsafe"
@@ -187,6 +189,11 @@ type ProjectCommits struct {
 	Commits     []git.CommitInfo `json:"commits"`
 }
 
+type SearchResult struct {
+	Results []ProjectCommits `json:"results"`
+	HasMore bool             `json:"hasMore"`
+}
+
 func (a *App) UpdatePackage(dirList []string, packages []string, branch string) (UpdateResult, error) {
 	runtime.EventsEmit(a.ctx, "log", "MultiGit 批量依赖更新")
 	runtime.EventsEmit(a.ctx, "log", "========================================")
@@ -322,28 +329,104 @@ func (a *App) UpdatePackage(dirList []string, packages []string, branch string) 
 }
 
 func (a *App) GetRecentCommits(dirList []string, branch string, count int) []ProjectCommits {
+	var (
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+		result []ProjectCommits
+	)
+
+	for _, cwd := range dirList {
+		wg.Add(1)
+		cwd := cwd
+		go func() {
+			defer wg.Done()
+
+			projectName := filepath.Base(cwd)
+			if !git.IsRepo(cwd) {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("跳过: %s (不是 git 仓库)", projectName))
+				return
+			}
+
+			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 的提交记录...", projectName))
+
+			if err := git.Fetch(a.ctx, cwd); err != nil {
+				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 失败: %s", projectName, err.Error()))
+				return
+			}
+
+			remoteRef := "origin/" + branch
+			commits, err := git.Log(cwd, remoteRef, count, 0)
+			if err != nil {
+				commits, err = git.Log(cwd, branch, count, 0)
+				if err != nil {
+					runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 提交记录失败: %s", projectName, err.Error()))
+					return
+				}
+			}
+
+			mu.Lock()
+			result = append(result, ProjectCommits{
+				ProjectName: projectName,
+				ProjectPath: cwd,
+				Commits:     commits,
+			})
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	return result
+}
+
+func (a *App) ListProjectBranches(dirList []string) map[string]interface{} {
+	seen := map[string]int{}
+	total := len(dirList)
+
+	for _, cwd := range dirList {
+		if !git.IsRepo(cwd) {
+			continue
+		}
+		branches, err := git.ListBranches(cwd)
+		if err != nil {
+			continue
+		}
+		for _, b := range branches {
+			seen[b]++
+		}
+	}
+
+	var allBranches []string
+	for b := range seen {
+		allBranches = append(allBranches, b)
+	}
+	sort.Strings(allBranches)
+
+	branchCounts := make(map[string]int)
+	for _, b := range allBranches {
+		branchCounts[b] = seen[b]
+	}
+
+	return map[string]interface{}{
+		"allBranches":   allBranches,
+		"branchCounts":  branchCounts,
+		"totalProjects": total,
+	}
+}
+
+func (a *App) GetRecentCommitsPage(dirList []string, branch string, count, skip int) []ProjectCommits {
 	var result []ProjectCommits
 
 	for _, cwd := range dirList {
 		projectName := filepath.Base(cwd)
 		if !git.IsRepo(cwd) {
-			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("跳过: %s (不是 git 仓库)", projectName))
-			continue
-		}
-
-		runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 的提交记录...", projectName))
-
-		if err := git.Fetch(a.ctx, cwd); err != nil {
-			runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 失败: %s", projectName, err.Error()))
 			continue
 		}
 
 		remoteRef := "origin/" + branch
-		commits, err := git.Log(cwd, remoteRef, count)
+		commits, err := git.Log(cwd, remoteRef, count, skip)
 		if err != nil {
-			commits, err = git.Log(cwd, branch, count)
+			commits, err = git.Log(cwd, branch, count, skip)
 			if err != nil {
-				runtime.EventsEmit(a.ctx, "log", fmt.Sprintf("获取 %s 提交记录失败: %s", projectName, err.Error()))
 				continue
 			}
 		}
@@ -356,6 +439,64 @@ func (a *App) GetRecentCommits(dirList []string, branch string, count int) []Pro
 	}
 
 	return result
+}
+
+func (a *App) SearchHistoryCommitsPage(dirList []string, branch, term string, pageSize, skip int) SearchResult {
+	result := make([]ProjectCommits, 0)
+	allHasMore := false
+
+	for _, cwd := range dirList {
+		projectName := filepath.Base(cwd)
+		if !git.IsRepo(cwd) {
+			continue
+		}
+
+		remoteRef := "origin/" + branch
+		commits, hasMore, err := git.SearchCommitsPage(cwd, remoteRef, term, pageSize, skip)
+		if err != nil {
+			commits, hasMore, err = git.SearchCommitsPage(cwd, branch, term, pageSize, skip)
+			if err != nil {
+				continue
+			}
+		}
+
+		if hasMore {
+			allHasMore = true
+		}
+		if len(commits) > 0 {
+			result = append(result, ProjectCommits{
+				ProjectName: projectName,
+				ProjectPath: cwd,
+				Commits:     commits,
+			})
+		}
+	}
+
+	return SearchResult{Results: result, HasMore: allHasMore}
+}
+
+func (a *App) GetCommitFiles(projectPath, hash string) []git.FileChange {
+	files, err := git.GetCommitFiles(projectPath, hash)
+	if err != nil {
+		return nil
+	}
+	return files
+}
+
+func (a *App) GetCommitFileDiff(projectPath, hash, filePath string) string {
+	diff, err := git.GetCommitFileDiff(projectPath, hash, filePath)
+	if err != nil {
+		return ""
+	}
+	return diff
+}
+
+func (a *App) GetCommitFileDiffSideBySide(projectPath, hash, filePath string) map[string]interface{} {
+	hunks, tooLarge, err := git.GetCommitFileDiffSideBySide(projectPath, hash, filePath)
+	if err != nil {
+		return map[string]interface{}{"hunks": nil, "tooLarge": false}
+	}
+	return map[string]interface{}{"hunks": hunks, "tooLarge": tooLarge}
 }
 
 func (a *App) ForceCheckoutBranch(dirList []string, sourceBranch string, targetBranch string) UpdateResult {
