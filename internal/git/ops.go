@@ -15,12 +15,68 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+func parseWSLPath(p string) (distro, wslPath string, ok bool) {
+	p = filepath.FromSlash(p)
+	parts := strings.SplitN(p, `\`, 5)
+	if len(parts) >= 4 && strings.HasPrefix(strings.ToLower(p), `\\wsl`) {
+		return parts[3], "/" + strings.ReplaceAll(parts[4], `\`, "/"), true
+	}
+	return "", "", false
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func gitCmd(cwd string, args ...string) *exec.Cmd {
+	if distro, wslPath, ok := parseWSLPath(cwd); ok {
+		pieces := []string{"exec", "git", "-C", shellQuote(wslPath)}
+		for _, a := range args {
+			pieces = append(pieces, shellQuote(a))
+		}
+		cmd := exec.Command("wsl", "-d", distro, "--", "sh", "-c", strings.Join(pieces, " "))
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return cmd
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	return cmd
+}
+
+func parseRefs(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var tags []string
+	for _, part := range strings.Split(s, ", ") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "tag: ") {
+			tags = append(tags, strings.TrimPrefix(part, "tag: "))
+		}
+	}
+	return tags
+}
+
 type CommitInfo struct {
-	Hash      string `json:"hash"`
-	Author    string `json:"author"`
-	Date      string `json:"date"`
-	Message   string `json:"message"`
-	Timestamp int64  `json:"-"`
+	Hash      string   `json:"hash"`
+	Author    string   `json:"author"`
+	Date      string   `json:"date"`
+	Message   string   `json:"message"`
+	Timestamp int64    `json:"-"`
+	Tags      []string `json:"tags,omitempty"`
+}
+
+type CommitDetail struct {
+	Hash          string `json:"hash"`
+	Author        string `json:"author"`
+	AuthorEmail   string `json:"authorEmail"`
+	AuthorDate    string `json:"authorDate"`
+	Committer     string `json:"committer"`
+	CommitterEmail string `json:"committerEmail"`
+	CommitterDate string   `json:"committerDate"`
+	Message       string   `json:"message"`
+	Tags          []string `json:"tags,omitempty"`
 }
 
 type FileChange struct {
@@ -41,9 +97,7 @@ type DiffHunk struct {
 }
 
 func CurrentBranch(cwd string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -52,16 +106,12 @@ func CurrentBranch(cwd string) (string, error) {
 }
 
 func IsRepo(cwd string) bool {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "rev-parse", "--git-dir")
 	return cmd.Run() == nil
 }
 
 func statusHasChanges(cwd string) (bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "status", "--porcelain")
 	out, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -87,9 +137,7 @@ func Stash(ctx context.Context, cwd string) (bool, error) {
 }
 
 func StashPop(ctx context.Context, cwd string) {
-	cmd := exec.Command("git", "stash", "list")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "stash", "list")
 	out, err := cmd.Output()
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return
@@ -169,9 +217,7 @@ func ResetHard(ctx context.Context, cwd string, ref string) {
 }
 
 func listLocalBranches(cwd string) ([]string, error) {
-	cmd := exec.Command("git", "branch")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "branch")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -188,9 +234,7 @@ func listLocalBranches(cwd string) ([]string, error) {
 }
 
 func listRemoteBranches(cwd string) ([]string, error) {
-	cmd := exec.Command("git", "branch", "-r")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "branch", "-r")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -233,13 +277,22 @@ func BranchExists(cwd string, branch string) (bool, error) {
 func ListBranches(cwd string) ([]string, error) {
 	seen := map[string]bool{}
 	var branches []string
+	var firstErr error
 
 	addBranches := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = cwd
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		if firstErr != nil {
+			return
+		}
+		cmd := gitCmd(cwd, args...)
 		out, err := cmd.Output()
 		if err != nil {
+			if firstErr == nil {
+				msg := err.Error()
+				if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+					msg += ": " + strings.TrimSpace(string(exitErr.Stderr))
+				}
+				firstErr = fmt.Errorf(msg)
+			}
 			return
 		}
 		for _, line := range strings.Split(string(out), "\n") {
@@ -258,7 +311,7 @@ func ListBranches(cwd string) ([]string, error) {
 	addBranches("branch", "--format=%(refname:short)")
 	addBranches("branch", "-r", "--format=%(refname:short)")
 
-	return branches, nil
+	return branches, firstErr
 }
 
 func Fetch(ctx context.Context, cwd string) error {
@@ -271,9 +324,7 @@ func Fetch(ctx context.Context, cwd string) error {
 }
 
 func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
-	cmd := exec.Command("git", "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--format=%H%x00%an%x00%ar%x00%s")
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--format=%H%x00%an%x00%ar%x00%s%x00%D")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -284,9 +335,13 @@ func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x00", 4)
-		if len(parts) == 4 {
-			commits = append(commits, CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]})
+		parts := strings.SplitN(line, "\x00", 5)
+		if len(parts) >= 4 {
+			c := CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]}
+			if len(parts) >= 5 {
+				c.Tags = parseRefs(parts[4])
+			}
+			commits = append(commits, c)
 		}
 	}
 	return commits, nil
@@ -305,12 +360,10 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 		}
 	}
 
-	format := "%H%x00%an%x00%ar%x00%s%x00%ct"
+	format := "%H%x00%an%x00%ar%x00%s%x00%ct%x00%D"
 
 	runCmd := func(args ...string) ([]CommitInfo, error) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = cwd
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		cmd := gitCmd(cwd, args...)
 		out, err := cmd.Output()
 		if err != nil {
 			return nil, err
@@ -320,10 +373,14 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 			if line == "" {
 				continue
 			}
-			parts := strings.SplitN(line, "\x00", 5)
-			if len(parts) == 5 {
+			parts := strings.SplitN(line, "\x00", 6)
+			if len(parts) >= 5 {
 				ts, _ := strconv.ParseInt(parts[4], 10, 64)
-				commits = append(commits, CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3], Timestamp: ts})
+				c := CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3], Timestamp: ts}
+				if len(parts) >= 6 {
+					c.Tags = parseRefs(parts[5])
+				}
+				commits = append(commits, c)
 			}
 		}
 		return commits, nil
@@ -342,9 +399,7 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 	}
 
 	// 3. Search by hash prefix
-	hashCmd := exec.Command("git", "rev-list", ref, "--max-count=5000")
-	hashCmd.Dir = cwd
-	hashCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	hashCmd := gitCmd(cwd, "rev-list", ref, "--max-count=5000")
 	hashOut, hashErr := hashCmd.Output()
 	if hashErr == nil {
 		var matchedHashes []string
@@ -373,9 +428,7 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 }
 
 func IsAncestor(cwd, hash, branch string) (bool, error) {
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", hash, branch)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "merge-base", "--is-ancestor", hash, branch)
 	err := cmd.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -493,9 +546,7 @@ func RestoreBackupBranches(ctx context.Context, cwd string) ([]string, error) {
 }
 
 func GetCommitFiles(cwd, hash string) ([]FileChange, error) {
-	cmd := exec.Command("git", "diff-tree", "--no-commit-id", "-r", "--name-status", "-z", hash)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "diff-tree", "--no-commit-id", "-r", "--name-status", "-z", hash)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -509,10 +560,34 @@ func GetCommitFiles(cwd, hash string) ([]FileChange, error) {
 	return files, nil
 }
 
+func GetCommitDetail(cwd, hash string) (*CommitDetail, error) {
+	cmd := gitCmd(cwd, "show", "--no-patch", "--date=format:%Y-%m-%d %H:%M:%S", "--format=%H%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%s%x00%D", hash)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\x00", 9)
+	if len(parts) < 8 {
+		return nil, fmt.Errorf("unexpected output: %s", string(out))
+	}
+	d := &CommitDetail{
+		Hash:           parts[0],
+		Author:         parts[1],
+		AuthorEmail:    parts[2],
+		AuthorDate:     parts[3],
+		Committer:      parts[4],
+		CommitterEmail: parts[5],
+		CommitterDate:  parts[6],
+		Message:        parts[7],
+	}
+	if len(parts) >= 9 {
+		d.Tags = parseRefs(parts[8])
+	}
+	return d, nil
+}
+
 func GetCommitFileDiff(cwd, hash, filePath string) (string, error) {
-	cmd := exec.Command("git", "show", "--no-color", hash, "--", filePath)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "show", "--no-color", hash, "--", filePath)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -524,9 +599,7 @@ func isFileTooLarge(cwd, hash, filePath string) bool {
 	if strings.Contains(filePath, ".min.") || strings.Contains(filePath, "-min.") {
 		return true
 	}
-	cmd := exec.Command("git", "show", hash+":"+filePath)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, "show", hash+":"+filePath)
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -555,9 +628,7 @@ func GetCommitFileDiffSideBySide(cwd, hash, filePath string) ([]DiffHunk, bool, 
 		return nil, true, nil
 	}
 
-	parentCmd := exec.Command("git", "rev-parse", hash+"^")
-	parentCmd.Dir = cwd
-	parentCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	parentCmd := gitCmd(cwd, "rev-parse", hash+"^")
 	parentOut, parentErr := parentCmd.Output()
 
 	parent := strings.TrimSpace(string(parentOut))
@@ -566,9 +637,7 @@ func GetCommitFileDiffSideBySide(cwd, hash, filePath string) ([]DiffHunk, bool, 
 	}
 
 	diffArgs := []string{"diff", parent, hash, "--", filePath, "-U3", "--no-color"}
-	cmd := exec.Command("git", diffArgs...)
-	cmd.Dir = cwd
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := gitCmd(cwd, diffArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, false, err

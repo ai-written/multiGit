@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -483,6 +484,14 @@ func (a *App) GetCommitFiles(projectPath, hash string) []git.FileChange {
 	return files
 }
 
+func (a *App) GetCommitDetail(projectPath, hash string) *git.CommitDetail {
+	detail, err := git.GetCommitDetail(projectPath, hash)
+	if err != nil {
+		return nil
+	}
+	return detail
+}
+
 func (a *App) GetCommitFileDiff(projectPath, hash, filePath string) string {
 	diff, err := git.GetCommitFileDiff(projectPath, hash, filePath)
 	if err != nil {
@@ -877,6 +886,52 @@ func (a *App) CheckUpdate() UpdateInfo {
 
 func (a *App) OpenURL(url string) {
 	runtime.BrowserOpenURL(a.ctx, url)
+}
+
+func (a *App) OpenInExplorer(path string) error {
+	cmd := exec.Command("explorer", filepath.FromSlash(path))
+	return cmd.Start()
+}
+
+func parseWSLPath(nativePath string) (distro, wslPath string, ok bool) {
+	parts := strings.SplitN(nativePath, `\`, 5)
+	if len(parts) >= 4 && strings.HasPrefix(nativePath, `\\wsl`) {
+		return parts[3], "/" + strings.ReplaceAll(parts[4], `\`, "/"), true
+	}
+	return "", "", false
+}
+
+func (a *App) OpenInTerminal(path string) error {
+	dir := filepath.FromSlash(path)
+	if distro, wslPath, ok := parseWSLPath(dir); ok {
+		cmd := exec.Command("cmd", "/C", "start", "wsl", "-d", distro, "-e", "bash", "-lic", "cd "+wslPath+" && exec bash")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return cmd.Start()
+	}
+	quoted := `"` + dir + `"`
+	for _, bin := range []string{"pwsh", "powershell"} {
+		if _, err := exec.LookPath(bin); err == nil {
+			args := []string{"/C", "start", "", bin, "-NoExit", "-Command", "cd " + quoted}
+			cmd := exec.Command("cmd", args...)
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			return cmd.Start()
+		}
+	}
+	cmd := exec.Command("cmd", "/C", "start", "cmd", "/K", "cd", "/d", dir)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	return cmd.Start()
+}
+
+func (a *App) OpenInVSCode(path string) error {
+	nativePath := filepath.FromSlash(path)
+	if distro, wslPath, ok := parseWSLPath(nativePath); ok {
+		cmd := exec.Command("wsl", "-d", distro, "-e", "bash", "-lic", "cd "+wslPath+" && code .")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return cmd.Start()
+	}
+	cmd := exec.Command("code", nativePath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	return cmd.Start()
 }
 
 func isNewer(latest, current string) bool {

@@ -2,7 +2,7 @@
 
 使用 Go + Wails v2 构建的桌面端批量 Git 项目工具。
 
-![alt text](image-1.png)
+![alt text](image.png)
 
 ## 功能
 
@@ -14,7 +14,8 @@
 - 每个 commit 可展开查看文件变更列表（A/M/D 状态）
 - 文件级侧边对比 diff（左右两栏同步滚动）
 - 自动跳过压缩 JS 等大文件的 diff 渲染
-- 双击 commit 复制完整 hash
+- 右键菜单：复制 SHA、查看完整提交信息
+- 支持显示 git tag 标签
 - 分支列表从已选项目中动态获取（本地 + 远程），无需手动配置
 - 搜索词全局保留，切换项目自动搜索或复用缓存
 
@@ -48,6 +49,9 @@
 - 实时终端输出，所有命令过程可见
 - 亮色 / 暗色主题切换
 - 启动时检查 GitHub Releases 新版本
+- 项目根目录支持下拉切换已保存的路径列表，设置中可编辑
+- 项目列表右键菜单：在文件管理器中显示、打开终端、使用 VSCode 打开
+- 支持 WSL 路径（`\\wsl.localhost\...`），自动使用 WSL 内部 git/npm/node
 
 ## 技术栈
 
@@ -83,6 +87,7 @@ build.bat
     "packages": [],
     "autoBumpProjects": [],
     "rootPath": "",
+    "rootPaths": [],
     "updateRepo": "ai-written/multiGit",
     "commitCount": 5
 }
@@ -95,6 +100,7 @@ build.bat
 | `packageVersions` | 包的默认版本号映射，如 `{"lodash": "4.0.0"}` |
 | `autoBumpProjects` | 需要自动升版本号的项目目录名 |
 | `rootPath` | 上次使用的项目根目录（自动记忆） |
+| `rootPaths` | 项目根目录列表，可在下拉框中快速切换（逗号分隔） |
 | `updateRepo` | GitHub 仓库 `user/repo`，用于版本更新检查（留空禁用） |
 | `commitCount` | Cherry-Pick 和历史记录每次获取的提交数量（默认 5） |
 

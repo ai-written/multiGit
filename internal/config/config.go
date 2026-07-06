@@ -13,6 +13,7 @@ type Config struct {
 	PackageVersionCache map[string]string `json:"packageVersionCache"`
 	AutoBumpProjects    []string          `json:"autoBumpProjects"`
 	RootPath            string            `json:"rootPath"`
+	RootPaths           []string          `json:"rootPaths"`
 	UpdateRepo          string            `json:"updateRepo"`
 	CommitCount         int               `json:"commitCount"`
 }
@@ -25,6 +26,7 @@ func DefaultConfig() Config {
 		PackageVersionCache: map[string]string{},
 		AutoBumpProjects:    []string{},
 		RootPath:            "",
+		RootPaths:           []string{},
 		UpdateRepo:          "ai-written/multiGit",
 		CommitCount:         5,
 	}
@@ -88,6 +90,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AutoBumpProjects == nil {
 		cfg.AutoBumpProjects = []string{}
+	}
+	if cfg.RootPaths == nil {
+		cfg.RootPaths = []string{}
 	}
 	if cfg.CommitCount == 0 {
 		cfg.CommitCount = 5

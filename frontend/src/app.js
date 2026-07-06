@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, GetRecentCommitsPage, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches, GetCommitFiles, GetCommitFileDiffSideBySide, SearchHistoryCommitsPage, ListProjectBranches } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, GetRecentCommitsPage, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches, GetCommitFiles, GetCommitFileDiffSideBySide, SearchHistoryCommitsPage, ListProjectBranches, GetCommitDetail, OpenInExplorer, OpenInTerminal, OpenInVSCode } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -84,8 +84,22 @@ async function loadAndApplyConfig() {
             Object.entries(config.packageVersionCache).forEach(([k, v]) => versionInputCache.set(k, v));
         }
         applyConfigToUI();
+        $('#rootPath').addEventListener('change', async () => {
+            const val = $('#rootPath').value;
+            if (val === '__browse__') {
+                await browseDir();
+                return;
+            }
+            if (val) {
+                config.rootPath = val;
+                await SaveConfig(config);
+                await loadProjects(val);
+            }
+        });
         if (config.rootPath) {
-            $('#rootPath').value = config.rootPath;
+            if ((config.rootPaths || []).includes(config.rootPath)) {
+                $('#rootPath').value = config.rootPath;
+            }
             await loadProjects(config.rootPath);
         }
     } catch (e) {
@@ -93,7 +107,22 @@ async function loadAndApplyConfig() {
     }
 }
 
+function renderRootPaths() {
+    const sel = $('#rootPath');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择项目根目录 —</option>' +
+        (config.rootPaths || []).map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('') +
+        `<option value="__browse__">── 浏览新目录 ──</option>`;
+    if (cur && (config.rootPaths || []).includes(cur)) {
+        sel.value = cur;
+    } else if (config.rootPath && (config.rootPaths || []).includes(config.rootPath)) {
+        sel.value = config.rootPath;
+    }
+}
+
 function applyConfigToUI() {
+    $('#branch').innerHTML = '<option value="">— 请选择项目 —</option>';
+    renderRootPaths();
     renderPackageList();
 }
 
@@ -177,8 +206,13 @@ async function browseDir() {
     try {
         const dir = await SelectDir();
         if (dir) {
-            $('#rootPath').value = dir;
+            if (!(config.rootPaths || []).includes(dir)) {
+                config.rootPaths = config.rootPaths || [];
+                config.rootPaths.push(dir);
+            }
             config.rootPath = dir;
+            renderRootPaths();
+            $('#rootPath').value = dir;
             await SaveConfig(config);
             await loadProjects(dir);
         }
@@ -452,6 +486,11 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     firstPage.forEach(pc => {
         s.allCommits.set(pc.project_path, [...pc.commits]);
     });
+    firstPage.forEach(pc => {
+        if (pc.commits.length < pageSize) {
+            projectAllLoaded[pc.project_path] = true;
+        }
+    });
 
     function updateTabCounts(primarySource) {
         tabs.querySelectorAll('.tab').forEach(tab => {
@@ -475,6 +514,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 <div style="width:100%;display:flex;align-items:center;gap:4px;font-size:12px">
                     <span class="commit-toggle" style="flex-shrink:0;width:14px;text-align:center;color:var(--text-muted);font-size:10px">▶</span>
                     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
+                    ${(c.tags || []).map(t => `<span style="display:inline-block;padding:0 5px;margin:0 2px;font-size:10px;border-radius:3px;background:rgba(124,58,237,0.15);color:var(--primary);white-space:nowrap">${escapeHtml(t)}</span>`).join('')}
                     <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
                 </div>
                 <div class="commit-files" style="display:none;padding:2px 0 2px 18px;width:100%;font-size:11px;font-family:var(--font-mono);line-height:1.8"></div>
@@ -495,10 +535,18 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         }
 
         content.querySelectorAll('.commit-item > div:first-child').forEach(row => {
-            row.addEventListener('click', async (e) => {
+            let clickTimer = null;
+            row.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const item = row.closest('.commit-item');
-                const filesDiv = item.querySelector('.commit-files');
+                if (clickTimer) {
+                    clearTimeout(clickTimer);
+                    clickTimer = null;
+                    return;
+                }
+                clickTimer = setTimeout(async () => {
+                    clickTimer = null;
+                    const item = row.closest('.commit-item');
+                    const filesDiv = item.querySelector('.commit-files');
                 if (filesDiv.style.display === 'none') {
                     if (!filesDiv.dataset.loaded) {
                         filesDiv.innerHTML = '<div class="diff-spinner"></div>';
@@ -652,16 +700,23 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 }
             });
         });
+    });
     }
 
     async function loadMore() {
         if (s.loading) return;
-        if (s.isSearchMode && isSearchAllLoaded()) return;
-        if (!s.isSearchMode && isAllLoaded()) return;
+        const cp = () => projectPaths[s.currentTabIndex];
+        if (s.isSearchMode && isSearchAllLoaded()) {
+            renderProjectCommits(s.searchResults.get(cp()) || [], cp());
+            updateTabCounts(s.searchResults);
+            return;
+        }
+        if (!s.isSearchMode && isAllLoaded()) {
+            renderProjectCommits(s.allCommits.get(cp()) || [], cp());
+            return;
+        }
 
         s.loading = true;
-        const indicator = content.querySelector('.scroll-loading');
-        if (indicator) indicator.textContent = '加载中...';
 
         if (s.isSearchMode) {
             incSearchSkip(searchPageSize);
@@ -685,10 +740,14 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 const nextPage = await GetRecentCommitsPage([currentPath], branch, pageSize, getSkip());
                 if (!nextPage || nextPage.length === 0 || nextPage.every(pc => pc.commits.length === 0)) {
                     setAllLoaded(true);
+                    renderProjectCommits(s.allCommits.get(currentPath) || [], currentPath);
                 } else {
                     nextPage.forEach(pc => {
                         const existing = s.allCommits.get(pc.project_path) || [];
                         s.allCommits.set(pc.project_path, existing.concat(pc.commits));
+                        if (pc.commits.length < pageSize) {
+                            projectAllLoaded[pc.project_path] = true;
+                        }
                     });
                     renderProjectCommits(s.allCommits.get(currentPath) || [], currentPath);
                     updateTabCounts(s.allCommits);
@@ -701,7 +760,9 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     }
 
     async function fillContent() {
-        if (!s.loading && !isAllLoaded() && content.scrollHeight <= content.clientHeight + 50) {
+        if (s.loading) return;
+        if (isAllLoaded()) return;
+        if (content.scrollHeight <= content.clientHeight + 50) {
             await loadMore();
         }
     }
@@ -725,15 +786,11 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
             const currentPath = projectPaths[s.currentTabIndex];
             const searchResp = await SearchHistoryCommitsPage([currentPath], branch, term, searchPageSize, 0);
             setSearchAllLoaded(!searchResp.hasMore);
-            const totalCount = (searchResp.results || []).reduce((sum, pc) => sum + pc.commits.length, 0);
             (searchResp.results || []).forEach(pc => {
                 s.searchResults.set(pc.project_path, pc.commits);
             });
             renderProjectCommits(s.searchResults.get(currentPath) || [], currentPath);
             updateTabCounts(s.searchResults);
-            if (isSearchAllLoaded() && totalCount > 0) {
-                setHistoryMsg(`共 ${totalCount} 条匹配结果`, '');
-            }
         } catch (e) {
             content.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">搜索失败</div>';
         }
@@ -994,6 +1051,7 @@ async function onCherryPick() {
 
 function openConfig() {
     $('#cfgRegistry').value = config.registry || '';
+    $('#cfgRootPaths').value = (config.rootPaths || []).join(', ');
     const pkgVersions = config.packageVersions || {};
     $('#cfgPackages').value = (config.packages || []).map(p => pkgVersions[p] ? `${p}@${pkgVersions[p]}` : p).join(', ');
     $('#cfgAutoBump').value = (config.autoBumpProjects || []).join(', ');
@@ -1007,6 +1065,7 @@ function closeConfig() {
 
 async function saveConfig() {
     config.registry = $('#cfgRegistry').value.trim();
+    config.rootPaths = $('#cfgRootPaths').value.split(',').map(s => s.trim()).filter(Boolean);
     const parsedPkgs = [];
     const parsedVersions = {};
     $('#cfgPackages').value.split(',').map(s => s.trim()).filter(Boolean).forEach(token => {
@@ -1054,13 +1113,110 @@ $('#btnForceCheckout').addEventListener('click', onForceCheckout);
 $('#btnRestoreBackup').addEventListener('click', onRestoreBackupBranches);
 $('#btnDeleteBackup').addEventListener('click', onDeleteBackupBranches);
 $('#btnFetchHistory').addEventListener('click', onFetchHistory);
-$('#historyPanelContent').addEventListener('dblclick', (e) => {
+$('#historyPanel').addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.commit-item');
-    if (item && item.dataset.hash) {
+    if (!item || !item.dataset.hash) return;
+    e.preventDefault();
+    const existing = document.querySelector('.ctx-menu');
+    if (existing) existing.remove();
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu';
+    menu.style.cssText = 'position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:12px;min-width:150px';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    function makeMenuEl(text, fn) {
+        const el = document.createElement('div');
+        el.textContent = text;
+        el.style.cssText = 'padding:6px 14px;cursor:pointer;color:var(--text);transition:background 0.1s';
+        el.addEventListener('mouseenter', () => el.style.background = 'var(--surface-hover)');
+        el.addEventListener('mouseleave', () => el.style.background = '');
+        el.addEventListener('click', () => { fn(); menu.remove(); });
+        return el;
+    }
+    menu.appendChild(makeMenuEl('Copy SHA', () => {
         navigator.clipboard.writeText(item.dataset.hash);
         item.style.outline = '2px solid var(--primary)';
         setTimeout(() => item.style.outline = '', 600);
+    }));
+    menu.appendChild(makeMenuEl('查看提交信息', () => {
+        GetCommitDetail(item.dataset.project, item.dataset.hash).then(detail => {
+            if (!detail) return;
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:200';
+            const box = document.createElement('div');
+            box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:520px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
+            const rows = [
+                ['提交', detail.hash],
+                ['提交者', `${detail.author} <${detail.authorEmail}>`],
+                ['创作时间', detail.authorDate],
+                ['提交人', `${detail.committer} <${detail.committerEmail}>`],
+                ['提交日期', detail.committerDate],
+                ['仓库路径', item.dataset.project],
+                ['标签', (detail.tags || []).join(', ')],
+                ['提交信息', detail.message],
+            ];
+            const parts = [
+                '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text)">提交信息</div>',
+                '<div style="padding:12px 18px">',
+                rows.map(([label, val]) =>
+                    `<div style="display:flex;gap:12px;margin-bottom:8px;font-size:12px">
+                        <span style="width:70px;flex-shrink:0;color:var(--text-muted)">${label}</span>
+                        <span style="flex:1;color:var(--text);word-break:break-all;user-select:text">${escapeHtml(val)}</span>
+                    </div>`
+                ).join(''),
+                '</div>',
+                '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">',
+                '<button class="btn btn-secondary" style="padding:6px 18px;font-size:12px">关闭</button>',
+                '</div>',
+            ].join('');
+            box.innerHTML = parts;
+            box.querySelector('.btn').addEventListener('click', () => overlay.remove());
+            overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove(); });
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+        });
+    }));
+    document.body.appendChild(menu);
+});
+document.addEventListener('click', () => {
+    const menu = document.querySelector('.ctx-menu');
+    if (menu) menu.remove();
+});
+
+$('#projectList').addEventListener('contextmenu', (e) => {
+    const label = e.target.closest('.checkbox-item');
+    if (!label) return;
+    const cb = label.querySelector('.proj-checkbox');
+    if (!cb) return;
+    e.preventDefault();
+    const existing = document.querySelector('.ctx-menu');
+    if (existing) existing.remove();
+    const path = cb.value;
+    const name = cb.dataset.name;
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu';
+    menu.style.cssText = 'position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:12px;min-width:160px';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    function makeItem(icon, text, fn) {
+        const el = document.createElement('div');
+        el.style.cssText = 'padding:6px 14px;cursor:pointer;color:var(--text);transition:background 0.1s;display:flex;align-items:center;gap:6px';
+        const iconSpan = document.createElement('span');
+        iconSpan.style.cssText = 'width:20px;text-align:center;flex-shrink:0';
+        iconSpan.textContent = icon;
+        const textSpan = document.createElement('span');
+        textSpan.textContent = text;
+        el.appendChild(iconSpan);
+        el.appendChild(textSpan);
+        el.addEventListener('mouseenter', () => el.style.background = 'var(--surface-hover)');
+        el.addEventListener('mouseleave', () => el.style.background = '');
+        el.addEventListener('click', () => { fn(); menu.remove(); });
+        return el;
     }
+    menu.appendChild(makeItem('📁', '在文件管理器中显示', () => OpenInExplorer(path)));
+    menu.appendChild(makeItem('🖥', '打开终端', () => OpenInTerminal(path)));
+    menu.appendChild(makeItem('📝', '使用 VSCode 打开', () => OpenInVSCode(path)));
+    document.body.appendChild(menu);
 });
 
 $('#btnMinimize').addEventListener('click', () => WindowMinimise());

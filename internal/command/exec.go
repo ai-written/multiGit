@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"syscall"
@@ -16,12 +17,36 @@ import (
 
 const CREATE_NO_WINDOW = 0x08000000
 
-func Run(ctx context.Context, name string, args []string, cwd string) error {
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func execCommand(name string, args []string, cwd string) *exec.Cmd {
+	cwd = filepath.FromSlash(cwd)
+	if cwd != "" && strings.HasPrefix(strings.ToLower(cwd), `\\wsl`) {
+		parts := strings.SplitN(cwd, `\`, 5)
+		if len(parts) >= 4 {
+			distro := parts[3]
+			wslPath := "/" + strings.ReplaceAll(parts[4], `\`, "/")
+			pieces := []string{"cd", shellQuote(wslPath), "&&", "exec", name}
+			for _, a := range args {
+				pieces = append(pieces, shellQuote(a))
+			}
+			cmd := exec.Command("wsl", "-d", distro, "--", "sh", "-c", strings.Join(pieces, " "))
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}
+			return cmd
+		}
+	}
 	cmd := exec.Command(name, args...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}
+	return cmd
+}
+
+func Run(ctx context.Context, name string, args []string, cwd string) error {
+	cmd := execCommand(name, args, cwd)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
@@ -63,11 +88,7 @@ func decodeWinOutput(data []byte) string {
 }
 
 func RunStreaming(ctx context.Context, name string, args []string, cwd string) error {
-	cmd := exec.Command(name, args...)
-	if cwd != "" {
-		cmd.Dir = cwd
-	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}
+	cmd := execCommand(name, args, cwd)
 
 	cmd.Stdout = &writer{ctx: ctx}
 	cmd.Stderr = &writer{ctx: ctx}

@@ -38,7 +38,9 @@
                     <div class="form-group">
                         <label class="form-label">项目根目录</label>
                         <div class="input-row">
-                            <input type="text" id="rootPath" class="input" placeholder="选择项目根目录..." readonly />
+                            <select id="rootPath" class="input">
+                                <option value="">— 选择项目根目录 —</option>
+                            </select>
                             <button type="button" class="btn btn-secondary" id="btnBrowse">浏览</button>
                         </div>
                     </div>
@@ -139,6 +141,10 @@
                 <div class="form-group">
                     <label class="form-label" for="cfgRegistry">npm 镜像源</label>
                     <input type="text" id="cfgRegistry" class="input" />
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cfgRootPaths">项目根目录（逗号分隔）</label>
+                    <input type="text" id="cfgRootPaths" class="input" placeholder="D:/code/project1, D:/code/project2" />
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="cfgPackages">常用包名（逗号分隔，支持 pkg@version）</label>
