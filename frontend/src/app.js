@@ -1,6 +1,6 @@
 import { EventsOn } from '/wailsjs/runtime/runtime.js';
 import { WindowMinimise, WindowToggleMaximise, WindowIsMaximised, Quit } from '/wailsjs/runtime/runtime.js';
-import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, GetRecentCommitsPage, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches, GetCommitFiles, GetCommitFileDiffSideBySide, SearchHistoryCommitsPage, ListProjectBranches, GetCommitDetail, OpenInExplorer, OpenInTerminal, OpenInVSCode } from '/wailsjs/go/main/App.js';
+import { LoadConfig, SaveConfig, SelectDir, ListProjects, UpdatePackage, CheckUpdate, OpenURL, GetRecentCommits, GetRecentCommitsPage, CherryPickCommits, ForceCheckoutBranch, DeleteBackupBranches, RestoreBackupBranches, GetCommitFiles, GetCommitFileDiffSideBySide, SearchHistoryCommitsPage, ListProjectBranches, GetCommitDetail, OpenInExplorer, OpenInTerminal, OpenInVSCode, OpenInVSCodeDiff, GetBranchDiffStat } from '/wailsjs/go/main/App.js';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -16,7 +16,8 @@ let config = {
     packages: [],
     autoBumpProjects: [],
     rootPath: '',
-    commitCount: 5
+    commitCount: 3,
+    historyCommitCount: 50,
 };
 
 function log(text) {
@@ -84,6 +85,7 @@ async function loadAndApplyConfig() {
             Object.entries(config.packageVersionCache).forEach(([k, v]) => versionInputCache.set(k, v));
         }
         applyConfigToUI();
+        $('#branch').innerHTML = '<option value="">— 请选择项目 —</option>';
         $('#rootPath').addEventListener('change', async () => {
             const val = $('#rootPath').value;
             if (val === '__browse__') {
@@ -121,7 +123,6 @@ function renderRootPaths() {
 }
 
 function applyConfigToUI() {
-    $('#branch').innerHTML = '<option value="">— 请选择项目 —</option>';
     renderRootPaths();
     renderPackageList();
 }
@@ -323,6 +324,26 @@ async function onFetchCommits() {
     try {
         const result = await GetRecentCommits(selectedProjects, branch, config.commitCount);
         renderCommitList(result);
+        // 获取分支列表填充目标分支下拉框
+        try {
+            const resp = await ListProjectBranches(selectedProjects);
+            const sel = $('#cpDestBranch');
+            const cur = sel.value;
+            const branches = resp.allBranches || [];
+            sel.innerHTML = '<option value="">— 请选择目标分支 —</option>' +
+                branches.map(b => `<option value="${b}">${b}</option>`).join('');
+            if (cur && branches.includes(cur)) {
+                sel.value = cur;
+            } else {
+                const priority = ['dev', 'develop', 'main', 'master'];
+                for (const name of priority) {
+                    if (branches.includes(name)) {
+                        sel.value = name;
+                        break;
+                    }
+                }
+            }
+        } catch (e) {}
     } catch (e) {
         logError('获取提交记录失败: ' + e);
     } finally {
@@ -339,17 +360,17 @@ function renderCommitList(projectCommits) {
     }
 
     container.innerHTML = projectCommits.map((pc, pi) => {
-        const commits = [...pc.commits].reverse();
+        const commits = pc.commits;
         const total = pc.commits.length;
         const commitsHtml = commits.map((c, ci) =>
             `<label class="commit-item">
-                <input type="checkbox" class="commit-checkbox" data-project="${pc.project_path}" data-hash="${c.hash}" data-order="${total - 1 - ci}" />
+                <input type="checkbox" class="commit-checkbox" data-project="${pc.project_path}" data-hash="${c.hash}" data-order="${ci}" ${ci === 0 ? 'checked' : ''} />
                 <div class="commit-body">
                     <div class="commit-row">
                         <span class="commit-hash">${c.hash.slice(0, 8)}</span>
                         <span class="commit-msg" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
                     </div>
-                    <div class="commit-meta">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</div>
+                    <div class="commit-meta" title="${escapeHtml(c.dateISO)}">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</div>
                 </div>
             </label>`
         ).join('');
@@ -403,6 +424,14 @@ async function refreshBranches() {
             branchSel.innerHTML = options;
             if (current && resp.allBranches.includes(current)) {
                 branchSel.value = current;
+            } else {
+                const priority = ['dev', 'develop', 'main', 'master'];
+                for (const name of priority) {
+                    if (resp.allBranches.includes(name)) {
+                        branchSel.value = name;
+                        break;
+                    }
+                }
             }
         }
     } catch (e) {}
@@ -426,7 +455,7 @@ async function onFetchHistory() {
     btn.textContent = '获取中...';
 
     try {
-        const pageSize = config.commitCount * 10;
+        const pageSize = (config.historyCommitCount || 50);
         const searchPageSize = pageSize;
         const firstPage = await GetRecentCommitsPage(selectedProjects, branch, pageSize, 0);
         if (firstPage && firstPage.length > 0) {
@@ -446,14 +475,17 @@ async function onFetchHistory() {
 function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstPage) {
     const tabs = $('#historyPanelTabs');
     let content = $('#historyPanelContent');
-    const searchInput = $('#historyPanelSearch');
+    let searchInput = $('#historyPanelSearch');
 
-    // 移除旧监听器：替换 content 元素
+    // 移除旧监听器：替换 content 与 searchInput 元素（否则 input 监听器会跨次调用累积泄漏）
     const newContent = content.cloneNode(false);
     content.parentNode.replaceChild(newContent, content);
     content = newContent;
-    tabs.innerHTML = '';
+    const newSearch = searchInput.cloneNode(false);
+    searchInput.parentNode.replaceChild(newSearch, searchInput);
+    searchInput = newSearch;
     searchInput.value = '';
+    tabs.innerHTML = '';
     setHistoryMsg('');
 
     const s = {
@@ -471,15 +503,16 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     let projectSearchAllLoaded = {};
 
     function curPath() { return projectPaths[s.currentTabIndex]; }
-    function getSkip() { return projectSkip[curPath()] || 0; }
-    function incSkip(d) { projectSkip[curPath()] = getSkip() + d; }
-    function isAllLoaded() { return !!projectAllLoaded[curPath()]; }
-    function setAllLoaded(v) { projectAllLoaded[curPath()] = v !== false; }
-    function getSearchSkip() { return projectSearchSkip[curPath()] || 0; }
-    function setSearchSkip(v) { projectSearchSkip[curPath()] = v; }
-    function incSearchSkip(d) { projectSearchSkip[curPath()] = getSearchSkip() + d; }
-    function isSearchAllLoaded() { return !!projectSearchAllLoaded[curPath()]; }
-    function setSearchAllLoaded(v) { projectSearchAllLoaded[curPath()] = v !== false; }
+    function normalizePath(p) { return p.replace(/\\/g, '/'); }
+    function getSkip() { return projectSkip[normalizePath(curPath())] || 0; }
+    function incSkip(d) { projectSkip[normalizePath(curPath())] = getSkip() + d; }
+    function isAllLoaded() { return !!projectAllLoaded[normalizePath(curPath())]; }
+    function setAllLoaded(v) { projectAllLoaded[normalizePath(curPath())] = v !== false; }
+    function getSearchSkip() { return projectSearchSkip[normalizePath(curPath())] || 0; }
+    function setSearchSkip(v) { projectSearchSkip[normalizePath(curPath())] = v; }
+    function incSearchSkip(d) { projectSearchSkip[normalizePath(curPath())] = getSearchSkip() + d; }
+    function isSearchAllLoaded() { return !!projectSearchAllLoaded[normalizePath(curPath())]; }
+    function setSearchAllLoaded(v) { projectSearchAllLoaded[normalizePath(curPath())] = v !== false; }
 
     let savedScrollTops = {};
 
@@ -487,17 +520,19 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         s.allCommits.set(pc.project_path, [...pc.commits]);
     });
     firstPage.forEach(pc => {
-        if (pc.commits.length < pageSize) {
-            projectAllLoaded[pc.project_path] = true;
+        const isLast = pc.commits.length < pageSize;
+        if (isLast) {
+            projectAllLoaded[normalizePath(pc.project_path)] = true;
         }
     });
 
     function updateTabCounts(primarySource) {
         tabs.querySelectorAll('.tab').forEach(tab => {
+            if (tab.dataset.projectIndex === undefined) return;
             const idx = parseInt(tab.dataset.projectIndex);
             const path = projectPaths[idx];
-            const count = primarySource.has(path) 
-                ? (primarySource.get(path) || []).length 
+            const count = primarySource.has(path)
+                ? (primarySource.get(path) || []).length
                 : (s.allCommits.get(path) || []).length;
             const name = firstPage.find(p => p.project_path === path)?.project_name || path.split('/').pop();
             tab.innerHTML = `${escapeHtml(name)} (<span class="tab-count">${count}</span>)`;
@@ -515,7 +550,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                     <span class="commit-toggle" style="flex-shrink:0;width:14px;text-align:center;color:var(--text-muted);font-size:10px">▶</span>
                     <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
                     ${(c.tags || []).map(t => `<span style="display:inline-block;padding:0 5px;margin:0 2px;font-size:10px;border-radius:3px;background:rgba(124,58,237,0.15);color:var(--primary);white-space:nowrap">${escapeHtml(t)}</span>`).join('')}
-                    <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
+                    <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap" title="${escapeHtml(c.dateISO)}">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
                 </div>
                 <div class="commit-files" style="display:none;padding:2px 0 2px 18px;width:100%;font-size:11px;font-family:var(--font-mono);line-height:1.8"></div>
             </div>`
@@ -538,6 +573,8 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
             let clickTimer = null;
             row.addEventListener('click', (e) => {
                 e.stopPropagation();
+                const ctx = document.querySelector('.ctx-menu');
+                if (ctx) ctx.remove();
                 if (clickTimer) {
                     clearTimeout(clickTimer);
                     clickTimer = null;
@@ -546,6 +583,8 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 clickTimer = setTimeout(async () => {
                     clickTimer = null;
                     const item = row.closest('.commit-item');
+                    content.querySelectorAll('.commit-item.active').forEach(el => el.classList.remove('active'));
+                    item.classList.add('active');
                     const filesDiv = item.querySelector('.commit-files');
                 if (filesDiv.style.display === 'none') {
                     if (!filesDiv.dataset.loaded) {
@@ -680,8 +719,36 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                                     }
                                     el.addEventListener('click', (e) => {
                                         e.stopPropagation();
+                                        const ctx = document.querySelector('.ctx-menu');
+                                        if (ctx) ctx.remove();
                                         if (e.target.closest('.file-diff')) return;
                                         toggleFileDiff(e);
+                                    });
+                                    el.addEventListener('contextmenu', (e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        const existing = document.querySelector('.ctx-menu');
+                                        if (existing) existing.remove();
+                                        const menu = document.createElement('div');
+                                        menu.className = 'ctx-menu';
+                                        menu.style.cssText = 'position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:12px;min-width:160px';
+                                        menu.style.left = e.clientX + 'px';
+                                        menu.style.top = e.clientY + 'px';
+                                        const fullPath = item.dataset.project + '/' + el.dataset.file;
+                                        [
+                                            ['📝 使用 VSCode 打开文件', () => OpenInVSCode(fullPath)],
+                                            ['📊 使用 VSCode 对比更改', () => OpenInVSCodeDiff(item.dataset.project, item.dataset.hash, el.dataset.file)],
+                                            ['📁 在文件管理器中显示', () => OpenInExplorer(fullPath)],
+                                        ].forEach(([text, fn]) => {
+                                            const itemEl = document.createElement('div');
+                                            itemEl.style.cssText = 'padding:6px 14px;cursor:pointer;color:var(--text);transition:background 0.1s';
+                                            itemEl.textContent = text;
+                                            itemEl.addEventListener('mouseenter', () => itemEl.style.background = 'color-mix(in srgb, var(--primary) 10%, transparent)');
+                                            itemEl.addEventListener('mouseleave', () => itemEl.style.background = '');
+                                            itemEl.addEventListener('click', () => { fn(); menu.remove(); });
+                                            menu.appendChild(itemEl);
+                                        });
+                                        document.body.appendChild(menu);
                                     });
                                 });
                             } else {
@@ -703,6 +770,41 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     });
     }
 
+    function renderStats() {
+        const commits = s.allCommits.get(curPath()) || [];
+        const stats = {};
+        let totalAdded = 0;
+        let totalDeleted = 0;
+
+        commits.forEach(c => {
+            if (!stats[c.author]) {
+                stats[c.author] = { author: c.author, count: 0, added: 0, deleted: 0 };
+            }
+            stats[c.author].count++;
+        });
+
+        const sorted = Object.values(stats).sort((a, b) => b.count - a.count);
+        const totalCommits = sorted.reduce((s, a) => s + a.count, 0);
+
+        content.innerHTML =
+            '<div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px">📊 提交统计</div>' +
+            '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+            '<thead><tr style="border-bottom:1px solid var(--border);color:var(--text-muted)">' +
+            '<th style="text-align:left;padding:6px 8px;font-weight:600">作者</th>' +
+            '<th style="text-align:right;padding:6px 8px;font-weight:600">提交数</th>' +
+            '<th style="text-align:right;padding:6px 8px;font-weight:600">占比</th>' +
+            '</tr></thead><tbody>' +
+            sorted.map(a => 
+                `<tr style="border-bottom:1px solid var(--border)">
+                    <td style="padding:6px 8px;color:var(--text)">${escapeHtml(a.author)}</td>
+                    <td style="padding:6px 8px;text-align:right;color:var(--text)">${a.count}</td>
+                    <td style="padding:6px 8px;text-align:right;color:var(--text-muted)">${(a.count / totalCommits * 100).toFixed(1)}%</td>
+                </tr>`
+            ).join('') +
+            '</tbody></table>' +
+            `<div style="padding:6px 8px;margin-top:4px;font-size:12px;color:var(--text-muted);text-align:right">合计: ${totalCommits} 条提交</div>`;
+    }
+
     async function loadMore() {
         if (s.loading) return;
         const cp = () => projectPaths[s.currentTabIndex];
@@ -719,19 +821,24 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         s.loading = true;
 
         if (s.isSearchMode) {
+            const myGen = ++searchGen;
+            const myPath = projectPaths[s.currentTabIndex];
             incSearchSkip(searchPageSize);
             try {
-                const currentPath = projectPaths[s.currentTabIndex];
-                const searchResp = await SearchHistoryCommitsPage([currentPath], branch, s.lastSearchTerm, searchPageSize, getSearchSkip());
-                setSearchAllLoaded(!searchResp.hasMore);
+                const searchResp = await SearchHistoryCommitsPage([myPath], branch, s.lastSearchTerm, searchPageSize, getSearchSkip());
+                if (myGen !== searchGen) return;
+                projectSearchAllLoaded[normalizePath(myPath)] = !searchResp.hasMore;
                 (searchResp.results || []).forEach(pc => {
                     const existing = s.searchResults.get(pc.project_path) || [];
                     s.searchResults.set(pc.project_path, existing.concat(pc.commits));
                 });
-                renderProjectCommits(s.searchResults.get(currentPath) || [], currentPath);
+                if (myPath !== projectPaths[s.currentTabIndex]) return;
+                renderProjectCommits(s.searchResults.get(myPath) || [], myPath);
                 updateTabCounts(s.searchResults);
             } catch (e) {
-                setSearchAllLoaded(true);
+                if (myGen === searchGen) {
+                    projectSearchAllLoaded[normalizePath(myPath)] = true;
+                }
             }
         } else {
             incSkip(pageSize);
@@ -746,7 +853,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                         const existing = s.allCommits.get(pc.project_path) || [];
                         s.allCommits.set(pc.project_path, existing.concat(pc.commits));
                         if (pc.commits.length < pageSize) {
-                            projectAllLoaded[pc.project_path] = true;
+                            projectAllLoaded[normalizePath(pc.project_path)] = true;
                         }
                     });
                     renderProjectCommits(s.allCommits.get(currentPath) || [], currentPath);
@@ -768,12 +875,14 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     }
 
     content.addEventListener('scroll', () => {
+        if (tabs.querySelector('.tab-active[data-mode="stats"]')) return;
         if (content.scrollTop + content.clientHeight >= content.scrollHeight - 150) {
             loadMore();
         }
     });
 
     let searchTimeout;
+    let searchGen = 0;
 
     async function triggerSearch(term) {
         if (!term) return;
@@ -781,23 +890,29 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         setSearchSkip(0);
         setSearchAllLoaded(false);
         s.lastSearchTerm = term;
+        const myGen = ++searchGen;
+        const myPath = projectPaths[s.currentTabIndex];
         content.innerHTML = '<div class="diff-spinner"></div><div style="padding:4px;text-align:center;color:var(--text-muted);font-size:12px">搜索中...</div>';
         try {
-            const currentPath = projectPaths[s.currentTabIndex];
-            const searchResp = await SearchHistoryCommitsPage([currentPath], branch, term, searchPageSize, 0);
-            setSearchAllLoaded(!searchResp.hasMore);
+            const searchResp = await SearchHistoryCommitsPage([myPath], branch, term, searchPageSize, 0);
+            if (myGen !== searchGen) return;
+            projectSearchAllLoaded[normalizePath(myPath)] = !searchResp.hasMore;
             (searchResp.results || []).forEach(pc => {
                 s.searchResults.set(pc.project_path, pc.commits);
             });
-            renderProjectCommits(s.searchResults.get(currentPath) || [], currentPath);
+            if (myPath !== projectPaths[s.currentTabIndex]) return;
+            renderProjectCommits(s.searchResults.get(myPath) || [], myPath);
             updateTabCounts(s.searchResults);
         } catch (e) {
-            content.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">搜索失败</div>';
+            if (myGen === searchGen && myPath === projectPaths[s.currentTabIndex]) {
+                content.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">搜索失败</div>';
+            }
         }
     }
 
     searchInput.addEventListener('input', () => {
         clearTimeout(searchTimeout);
+        ++searchGen;
         const term = searchInput.value.trim();
         if (term) {
             searchTimeout = setTimeout(() => triggerSearch(term), 300);
@@ -818,10 +933,18 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     tabs.innerHTML = projectPaths.map((path, i) => {
         const pc = firstPage.find(p => p.project_path === path);
         return `<button type="button" class="tab ${i === 0 ? 'tab-active' : ''}" data-project-index="${i}">${escapeHtml(pc ? pc.project_name : path.split('/').pop())} (${(s.allCommits.get(path) || []).length})</button>`;
-    }).join('');
+    }).join('') + '<button type="button" class="tab" data-mode="stats">📊 统计</button>';
 
     tabs.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
+            if (tab.dataset.mode === 'stats') {
+                savedScrollTops[curPath()] = content.scrollTop;
+                tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
+                tab.classList.add('tab-active');
+                renderStats();
+                return;
+            }
+            ++searchGen;
             savedScrollTops[curPath()] = content.scrollTop;
 
             tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
@@ -1001,9 +1124,9 @@ async function onCherryPick() {
         return;
     }
 
-    const destBranch = $('#cpDestBranch').value.trim();
+    const destBranch = $('#cpDestBranch').value;
     if (!destBranch) {
-        logError('请输入目标分支名');
+        logError('请选择目标分支');
         return;
     }
 
@@ -1055,7 +1178,8 @@ function openConfig() {
     const pkgVersions = config.packageVersions || {};
     $('#cfgPackages').value = (config.packages || []).map(p => pkgVersions[p] ? `${p}@${pkgVersions[p]}` : p).join(', ');
     $('#cfgAutoBump').value = (config.autoBumpProjects || []).join(', ');
-    $('#cfgCommitCount').value = config.commitCount || 5;
+    $('#cfgCommitCount').value = config.commitCount || 3;
+    $('#cfgHistoryCount').value = config.historyCommitCount || 50;
     $('#configModal').style.display = 'flex';
 }
 
@@ -1084,7 +1208,8 @@ async function saveConfig() {
     config.packages = parsedPkgs;
     config.packageVersions = parsedVersions;
     config.autoBumpProjects = $('#cfgAutoBump').value.split(',').map(s => s.trim()).filter(Boolean);
-    config.commitCount = parseInt($('#cfgCommitCount').value) || 5;
+    config.commitCount = parseInt($('#cfgCommitCount').value) || 3;
+    config.historyCommitCount = parseInt($('#cfgHistoryCount').value) || 50;
 
     try {
         await SaveConfig(config);
@@ -1113,9 +1238,73 @@ $('#btnForceCheckout').addEventListener('click', onForceCheckout);
 $('#btnRestoreBackup').addEventListener('click', onRestoreBackupBranches);
 $('#btnDeleteBackup').addEventListener('click', onDeleteBackupBranches);
 $('#btnFetchHistory').addEventListener('click', onFetchHistory);
+$('#btnBranchCompare').addEventListener('click', async () => {
+    const selected = Array.from($$('.proj-checkbox:checked')).map(cb => cb.value);
+    const branch = $('#branch').value;
+    if (selected.length === 0 || !branch) {
+        logError('请先选择项目和分支');
+        return;
+    }
+    try {
+        const resp = await ListProjectBranches(selected);
+        const branches = resp.allBranches || [];
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:200';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:480px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
+        box.innerHTML =
+            '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text)">🔀 分支对比</div>' +
+            '<div style="padding:14px 18px">' +
+            '<div style="display:flex;gap:8px;margin-bottom:12px">' +
+            '<select id="bcBranchA" class="input">' + branches.map(b => `<option value="${b}" ${b === branch ? 'selected' : ''}>${b}</option>`).join('') + '</select>' +
+            '<span style="line-height:32px;color:var(--text-muted)">vs</span>' +
+            '<select id="bcBranchB" class="input">' + branches.map(b => `<option value="${b}" ${b !== branch ? 'selected' : ''}>${b}</option>`).join('') + '</select>' +
+            '</div>' +
+            '<button class="btn btn-primary" id="bcDoCompare" style="width:100%">对比</button>' +
+            '<div id="bcResult" style="margin-top:12px"></div>' +
+            '</div>' +
+            '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">' +
+            '<button class="btn btn-secondary" style="padding:6px 18px;font-size:12px">关闭</button></div>';
+        box.querySelector('#bcDoCompare').addEventListener('click', async () => {
+            const a = box.querySelector('#bcBranchA').value;
+            const b = box.querySelector('#bcBranchB').value;
+            if (!a || !b) return;
+            const result = box.querySelector('#bcResult');
+            result.innerHTML = '<div style="padding:8px;text-align:center;color:var(--text-muted);font-size:12px">对比中...</div>';
+            try {
+                // Compare for each selected project
+                let stat = null;
+                for (const p of selected) {
+                    const s = await GetBranchDiffStat(p, a, b);
+                    if (s) { stat = s; break; }
+                }
+                if (!stat) { result.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">对比失败</div>'; return; }
+                function ic(n) { return '<span style="display:inline-block;width:24px;text-align:center;flex-shrink:0">' + n + '</span>'; }
+                result.innerHTML =
+                    '<div style="font-size:12px;line-height:1.8">' +
+                    `<div>${ic('🔺')} <strong>${escapeHtml(a)}</strong> 领先 <strong>${escapeHtml(b)}</strong>: <span style="color:var(--error)">+${stat.commitsAhead}</span> 提交</div>` +
+                    `<div>${ic('🔻')} <strong>${escapeHtml(b)}</strong> 领先 <strong>${escapeHtml(a)}</strong>: <span style="color:var(--success)">+${stat.commitsBehind}</span> 提交</div>` +
+                    '<div style="border-top:1px solid var(--border);margin:6px 0;padding-top:6px">' +
+                    `<div>${ic('📄')} 新增文件: ${stat.filesAdded}</div>` +
+                    `<div>${ic('📝')} 修改文件: ${stat.filesModified}</div>` +
+                    `<div>${ic('🗑')} 删除文件: ${stat.filesDeleted}</div>` +
+                    `<div style="margin-top:4px">${ic('➕')} 新增行: <span style="color:var(--success)">+${stat.linesAdded}</span></div>` +
+                    `<div>${ic('➖')} 删除行: <span style="color:var(--error)">-${stat.linesDeleted}</span></div>` +
+                    '</div></div>';
+            } catch (e) { result.innerHTML = '<div style="padding:8px;text-align:center;color:var(--error);font-size:12px">对比失败</div>'; }
+        });
+        box.querySelectorAll('.btn-secondary').forEach(b => b.addEventListener('click', () => overlay.remove()));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+    } catch (e) { logError('获取分支列表失败: ' + e); }
+});
 $('#historyPanel').addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.commit-item');
     if (!item || !item.dataset.hash) return;
+    const content = $('#historyPanelContent');
+    content.querySelectorAll('.commit-item.active').forEach(el => el.classList.remove('active'));
+    item.classList.add('active');
     e.preventDefault();
     const existing = document.querySelector('.ctx-menu');
     if (existing) existing.remove();
@@ -1128,7 +1317,7 @@ $('#historyPanel').addEventListener('contextmenu', (e) => {
         const el = document.createElement('div');
         el.textContent = text;
         el.style.cssText = 'padding:6px 14px;cursor:pointer;color:var(--text);transition:background 0.1s';
-        el.addEventListener('mouseenter', () => el.style.background = 'var(--surface-hover)');
+        el.addEventListener('mouseenter', () => el.style.background = 'color-mix(in srgb, var(--primary) 10%, transparent)');
         el.addEventListener('mouseleave', () => el.style.background = '');
         el.addEventListener('click', () => { fn(); menu.remove(); });
         return el;
@@ -1181,6 +1370,8 @@ $('#historyPanel').addEventListener('contextmenu', (e) => {
 document.addEventListener('click', () => {
     const menu = document.querySelector('.ctx-menu');
     if (menu) menu.remove();
+    const c = $('#historyPanelContent');
+    if (c) c.querySelectorAll('.commit-item.active').forEach(el => el.classList.remove('active'));
 });
 
 $('#projectList').addEventListener('contextmenu', (e) => {
@@ -1208,7 +1399,7 @@ $('#projectList').addEventListener('contextmenu', (e) => {
         textSpan.textContent = text;
         el.appendChild(iconSpan);
         el.appendChild(textSpan);
-        el.addEventListener('mouseenter', () => el.style.background = 'var(--surface-hover)');
+        el.addEventListener('mouseenter', () => el.style.background = 'color-mix(in srgb, var(--primary) 10%, transparent)');
         el.addEventListener('mouseleave', () => el.style.background = '');
         el.addEventListener('click', () => { fn(); menu.remove(); });
         return el;

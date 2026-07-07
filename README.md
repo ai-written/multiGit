@@ -14,10 +14,11 @@
 - 每个 commit 可展开查看文件变更列表（A/M/D 状态）
 - 文件级侧边对比 diff（左右两栏同步滚动）
 - 自动跳过压缩 JS 等大文件的 diff 渲染
-- 右键菜单：复制 SHA、查看完整提交信息
+- 右键菜单：复制 SHA、查看完整提交信息、VSCode 打开文件、VSCode 对比更改
 - 支持显示 git tag 标签
 - 分支列表从已选项目中动态获取（本地 + 远程），无需手动配置
 - 搜索词全局保留，切换项目自动搜索或复用缓存
+- 自动分页加载，加载完成后正确显示结束标记
 
 ### 批量更新依赖
 - 选择项目根目录，自动扫描所有 Git 子项目
@@ -52,6 +53,12 @@
 - 项目根目录支持下拉切换已保存的路径列表，设置中可编辑
 - 项目列表右键菜单：在文件管理器中显示、打开终端、使用 VSCode 打开
 - 支持 WSL 路径（`\\wsl.localhost\...`），自动使用 WSL 内部 git/npm/node
+- WSL 环境使用 login shell，正确加载 nvm 等用户配置
+
+### 分支对比
+- 选择任意两个分支对比 commit 领先/落后数量
+- 显示文件级差异统计（新增/修改/删除文件数，新增/删除行数）
+- 自动 fallback 到远程跟踪分支，无需本地分支存在
 
 ## 技术栈
 
@@ -89,7 +96,8 @@ build.bat
     "rootPath": "",
     "rootPaths": [],
     "updateRepo": "ai-written/multiGit",
-    "commitCount": 5
+    "commitCount": 3,
+    "historyCommitCount": 50
 }
 ```
 
@@ -102,7 +110,8 @@ build.bat
 | `rootPath` | 上次使用的项目根目录（自动记忆） |
 | `rootPaths` | 项目根目录列表，可在下拉框中快速切换（逗号分隔） |
 | `updateRepo` | GitHub 仓库 `user/repo`，用于版本更新检查（留空禁用） |
-| `commitCount` | Cherry-Pick 和历史记录每次获取的提交数量（默认 5） |
+| `commitCount` | Cherry-Pick 每次获取的提交数量（默认 3） |
+| `historyCommitCount` | 历史记录每次获取的提交数量（默认 50） |
 
 ## 工作流程
 

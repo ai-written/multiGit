@@ -430,5 +430,6 @@ func escapeJSON(s string) string {
 
 func Install(ctx context.Context, cwd string, registry string) error {
 	runtime.EventsEmit(ctx, "log", "[npm] 执行 npm install...")
-	return command.Run(ctx, "npm", []string{"install", "--registry=" + registry}, cwd)
+	args := []string{"install", "--no-bin-links", "--registry=" + registry}
+	return command.Run(ctx, "npm", args, cwd)
 }

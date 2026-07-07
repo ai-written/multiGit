@@ -15,7 +15,8 @@ type Config struct {
 	RootPath            string            `json:"rootPath"`
 	RootPaths           []string          `json:"rootPaths"`
 	UpdateRepo          string            `json:"updateRepo"`
-	CommitCount         int               `json:"commitCount"`
+	CommitCount         int `json:"commitCount"`
+	HistoryCommitCount  int `json:"historyCommitCount"`
 }
 
 func DefaultConfig() Config {
@@ -28,7 +29,8 @@ func DefaultConfig() Config {
 		RootPath:            "",
 		RootPaths:           []string{},
 		UpdateRepo:          "ai-written/multiGit",
-		CommitCount:         5,
+		CommitCount:         3,
+		HistoryCommitCount:  50,
 	}
 }
 
@@ -95,7 +97,10 @@ func Load() (Config, error) {
 		cfg.RootPaths = []string{}
 	}
 	if cfg.CommitCount == 0 {
-		cfg.CommitCount = 5
+		cfg.CommitCount = 3
+	}
+	if cfg.HistoryCommitCount == 0 {
+		cfg.HistoryCommitCount = 50
 	}
 
 	return cfg, nil

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"io"
 	"multigit/internal/command"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -35,6 +37,7 @@ func gitCmd(cwd string, args ...string) *exec.Cmd {
 			pieces = append(pieces, shellQuote(a))
 		}
 		cmd := exec.Command("wsl", "-d", distro, "--", "sh", "-c", strings.Join(pieces, " "))
+		cmd.Stderr = io.Discard
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		return cmd
 	}
@@ -65,6 +68,7 @@ type CommitInfo struct {
 	Message   string   `json:"message"`
 	Timestamp int64    `json:"-"`
 	Tags      []string `json:"tags,omitempty"`
+	DateISO   string   `json:"dateISO,omitempty"`
 }
 
 type CommitDetail struct {
@@ -96,6 +100,124 @@ type DiffHunk struct {
 	Lines []DiffLine `json:"lines"`
 }
 
+type BranchDiffStat struct {
+	CommitsAhead  int `json:"commitsAhead"`
+	CommitsBehind int `json:"commitsBehind"`
+	FilesAdded    int `json:"filesAdded"`
+	FilesModified int `json:"filesModified"`
+	FilesDeleted  int `json:"filesDeleted"`
+	LinesAdded    int `json:"linesAdded"`
+	LinesDeleted  int `json:"linesDeleted"`
+}
+
+func GetBranchDiffStat(cwd, branchA, branchB string) (*BranchDiffStat, error) {
+	// Run git cmd with fallback to origin/<branch>
+	run := func(args ...string) ([]byte, error) {
+		out, err := gitCmd(cwd, args...).Output()
+		if err == nil {
+			return out, nil
+		}
+		// Try with local args first failed - fallback will be handled in specific calls
+		return nil, err
+	}
+
+	withOrigin := func(a string) string {
+		switch {
+		case a == branchA:
+			return "origin/" + a
+		case a == branchB:
+			return "origin/" + a
+		case a == "^"+branchA:
+			return "^origin/" + branchA
+		case a == "^"+branchB:
+			return "^origin/" + branchB
+		case a == branchA+".."+branchB:
+			return "origin/" + branchA + ".." + "origin/" + branchB
+		default:
+			return a
+		}
+	}
+
+	runWithFallback := func(cmd string, args ...string) ([]byte, error) {
+		fullArgs := append([]string{cmd}, args...)
+		out, err := run(fullArgs...)
+		if err == nil {
+			return out, nil
+		}
+		fallbackArgs := make([]string, len(args))
+		for i, a := range args {
+			fallbackArgs[i] = withOrigin(a)
+		}
+		fullFallback := append([]string{cmd}, fallbackArgs...)
+		return run(fullFallback...)
+	}
+
+	parseInt := func(b []byte) int {
+		var n int
+		if len(b) == 0 {
+			return 0
+		}
+		fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &n)
+		return n
+	}
+
+	aheadOut, aheadErr := runWithFallback("rev-list", "--count", branchA, "^"+branchB)
+	behindOut, behindErr := runWithFallback("rev-list", "--count", branchB, "^"+branchA)
+	if aheadErr != nil || behindErr != nil {
+		return nil, fmt.Errorf("one or both branches not found in this repository")
+	}
+	ahead := parseInt(aheadOut)
+	behind := parseInt(behindOut)
+
+	diffRef := branchA + ".." + branchB
+	numstatOut, numstatErr := runWithFallback("diff", "--numstat", diffRef)
+	if numstatErr != nil {
+		numstatOut, _ = run("diff", "--numstat", withOrigin(diffRef))
+	}
+
+	var stat BranchDiffStat
+	stat.CommitsAhead = ahead
+	stat.CommitsBehind = behind
+
+	for _, line := range strings.Split(strings.TrimSpace(string(numstatOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 3 {
+			continue
+		}
+		added := parseInt([]byte(parts[0]))
+		deleted := parseInt([]byte(parts[1]))
+		stat.LinesAdded += added
+		stat.LinesDeleted += deleted
+	}
+
+	statusOut, statusErr := runWithFallback("diff", "--name-status", diffRef)
+	if statusErr != nil {
+		statusOut, _ = run("diff", "--name-status", withOrigin(diffRef))
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(statusOut)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 1 {
+			continue
+		}
+		switch parts[0][0] {
+		case 'A':
+			stat.FilesAdded++
+		case 'M', 'R':
+			stat.FilesModified++
+		case 'D':
+			stat.FilesDeleted++
+		}
+	}
+
+	return &stat, nil
+}
+
 func CurrentBranch(cwd string) (string, error) {
 	cmd := gitCmd(cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
@@ -106,8 +228,17 @@ func CurrentBranch(cwd string) (string, error) {
 }
 
 func IsRepo(cwd string) bool {
-	cmd := gitCmd(cwd, "rev-parse", "--git-dir")
-	return cmd.Run() == nil
+	path := filepath.Join(cwd, ".git")
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		return true
+	}
+	// 子模块：.git 是文件，内容为 "gitdir: ../.git/modules/xxx"
+	data, _ := os.ReadFile(path)
+	return bytes.HasPrefix(data, []byte("gitdir: "))
 }
 
 func statusHasChanges(cwd string) (bool, error) {
@@ -277,41 +408,26 @@ func BranchExists(cwd string, branch string) (bool, error) {
 func ListBranches(cwd string) ([]string, error) {
 	seen := map[string]bool{}
 	var branches []string
-	var firstErr error
 
-	addBranches := func(args ...string) {
-		if firstErr != nil {
-			return
+	cmd := gitCmd(cwd, "branch", "-a", "--format=%(refname:short)")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
-		cmd := gitCmd(cwd, args...)
-		out, err := cmd.Output()
-		if err != nil {
-			if firstErr == nil {
-				msg := err.Error()
-				if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-					msg += ": " + strings.TrimSpace(string(exitErr.Stderr))
-				}
-				firstErr = fmt.Errorf(msg)
-			}
-			return
-		}
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			trimmed := strings.TrimPrefix(line, "origin/")
-			if !seen[trimmed] && trimmed != "" && !strings.Contains(trimmed, " -> ") {
-				seen[trimmed] = true
-				branches = append(branches, trimmed)
-			}
+		trimmed := strings.TrimPrefix(line, "remotes/")
+		trimmed = strings.TrimPrefix(trimmed, "origin/")
+		if !seen[trimmed] && trimmed != "" && trimmed != "origin" && !strings.Contains(trimmed, " -> ") {
+			seen[trimmed] = true
+			branches = append(branches, trimmed)
 		}
 	}
 
-	addBranches("branch", "--format=%(refname:short)")
-	addBranches("branch", "-r", "--format=%(refname:short)")
-
-	return branches, firstErr
+	return branches, nil
 }
 
 func Fetch(ctx context.Context, cwd string) error {
@@ -324,7 +440,7 @@ func Fetch(ctx context.Context, cwd string) error {
 }
 
 func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
-	cmd := gitCmd(cwd, "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--format=%H%x00%an%x00%ar%x00%s%x00%D")
+	cmd := gitCmd(cwd, "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--date=format:%Y-%m-%d %H:%M:%S", "--format=%H%x00%an%x00%ar%x00%s%x00%D%x00%ad")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -335,11 +451,14 @@ func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x00", 5)
+		parts := strings.SplitN(line, "\x00", 6)
 		if len(parts) >= 4 {
 			c := CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]}
 			if len(parts) >= 5 {
 				c.Tags = parseRefs(parts[4])
+			}
+			if len(parts) >= 6 {
+				c.DateISO = parts[5]
 			}
 			commits = append(commits, c)
 		}
@@ -360,7 +479,8 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 		}
 	}
 
-	format := "%H%x00%an%x00%ar%x00%s%x00%ct%x00%D"
+	format := "%H%x00%an%x00%ar%x00%s%x00%ct%x00%D%x00%ad"
+	dateArg := "--date=format:%Y-%m-%d %H:%M:%S"
 
 	runCmd := func(args ...string) ([]CommitInfo, error) {
 		cmd := gitCmd(cwd, args...)
@@ -373,12 +493,15 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 			if line == "" {
 				continue
 			}
-			parts := strings.SplitN(line, "\x00", 6)
+			parts := strings.SplitN(line, "\x00", 7)
 			if len(parts) >= 5 {
 				ts, _ := strconv.ParseInt(parts[4], 10, 64)
 				c := CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3], Timestamp: ts}
 				if len(parts) >= 6 {
 					c.Tags = parseRefs(parts[5])
+				}
+				if len(parts) >= 7 {
+					c.DateISO = parts[6]
 				}
 				commits = append(commits, c)
 			}
@@ -387,13 +510,13 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 	}
 
 	// 1. Search by message
-	msgCommits, _ := runCmd("log", ref, "--regexp-ignore-case", "--grep", term, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", pageSize), "--format="+format)
+	msgCommits, _ := runCmd("log", ref, "--regexp-ignore-case", "--grep", term, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", pageSize), dateArg, "--format="+format)
 	for _, c := range msgCommits {
 		addIfNew(c)
 	}
 
 	// 2. Search by author
-	authorCommits, _ := runCmd("log", ref, "--regexp-ignore-case", "--author", term, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", pageSize), "--format="+format)
+	authorCommits, _ := runCmd("log", ref, "--regexp-ignore-case", "--author", term, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", pageSize), dateArg, "--format="+format)
 	for _, c := range authorCommits {
 		addIfNew(c)
 	}
@@ -409,7 +532,7 @@ func SearchCommitsPage(cwd, ref, term string, pageSize, skip int) ([]CommitInfo,
 			}
 		}
 		for i := skip; i < len(matchedHashes) && len(results)-len(msgCommits)-len(authorCommits) < pageSize; i++ {
-			c, _ := runCmd("log", ref, "-n1", "--format="+format, matchedHashes[i])
+			c, _ := runCmd("log", ref, "-n1", dateArg, "--format="+format, matchedHashes[i])
 			if len(c) > 0 {
 				addIfNew(c[0])
 			}
@@ -558,6 +681,15 @@ func GetCommitFiles(cwd, hash string) ([]FileChange, error) {
 		files = append(files, FileChange{Status: parts[i], FilePath: parts[i+1]})
 	}
 	return files, nil
+}
+
+func GetCommitFileContent(cwd, hash, filePath string) (string, error) {
+	cmd := gitCmd(cwd, "show", hash+":"+filePath)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func GetCommitDetail(cwd, hash string) (*CommitDetail, error) {

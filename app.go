@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -423,6 +424,8 @@ func (a *App) GetRecentCommitsPage(dirList []string, branch string, count, skip 
 			continue
 		}
 
+		git.Fetch(a.ctx, cwd)
+
 		remoteRef := "origin/" + branch
 		commits, err := git.Log(cwd, remoteRef, count, skip)
 		if err != nil {
@@ -451,6 +454,8 @@ func (a *App) SearchHistoryCommitsPage(dirList []string, branch, term string, pa
 		if !git.IsRepo(cwd) {
 			continue
 		}
+
+		git.Fetch(a.ctx, cwd)
 
 		remoteRef := "origin/" + branch
 		commits, hasMore, err := git.SearchCommitsPage(cwd, remoteRef, term, pageSize, skip)
@@ -490,6 +495,14 @@ func (a *App) GetCommitDetail(projectPath, hash string) *git.CommitDetail {
 		return nil
 	}
 	return detail
+}
+
+func (a *App) GetBranchDiffStat(projectPath, branchA, branchB string) *git.BranchDiffStat {
+	stat, err := git.GetBranchDiffStat(projectPath, branchA, branchB)
+	if err != nil {
+		return nil
+	}
+	return stat
 }
 
 func (a *App) GetCommitFileDiff(projectPath, hash, filePath string) string {
@@ -889,13 +902,14 @@ func (a *App) OpenURL(url string) {
 }
 
 func (a *App) OpenInExplorer(path string) error {
-	cmd := exec.Command("explorer", filepath.FromSlash(path))
+	cmd := exec.Command("explorer", "/select,"+filepath.FromSlash(path))
 	return cmd.Start()
 }
 
 func parseWSLPath(nativePath string) (distro, wslPath string, ok bool) {
-	parts := strings.SplitN(nativePath, `\`, 5)
-	if len(parts) >= 4 && strings.HasPrefix(nativePath, `\\wsl`) {
+	normalized := filepath.FromSlash(nativePath)
+	parts := strings.SplitN(normalized, `\`, 5)
+	if len(parts) >= 4 && strings.HasPrefix(strings.ToLower(normalized), `\\wsl`) {
 		return parts[3], "/" + strings.ReplaceAll(parts[4], `\`, "/"), true
 	}
 	return "", "", false
@@ -904,7 +918,7 @@ func parseWSLPath(nativePath string) (distro, wslPath string, ok bool) {
 func (a *App) OpenInTerminal(path string) error {
 	dir := filepath.FromSlash(path)
 	if distro, wslPath, ok := parseWSLPath(dir); ok {
-		cmd := exec.Command("cmd", "/C", "start", "wsl", "-d", distro, "-e", "bash", "-lic", "cd "+wslPath+" && exec bash")
+		cmd := exec.Command("cmd", "/C", "start", "wsl", "-d", distro, "-e", "bash", "-lic", "cd '"+strings.ReplaceAll(wslPath, "'", "'\\''")+"' && exec bash")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		return cmd.Start()
 	}
@@ -925,11 +939,55 @@ func (a *App) OpenInTerminal(path string) error {
 func (a *App) OpenInVSCode(path string) error {
 	nativePath := filepath.FromSlash(path)
 	if distro, wslPath, ok := parseWSLPath(nativePath); ok {
-		cmd := exec.Command("wsl", "-d", distro, "-e", "bash", "-lic", "cd "+wslPath+" && code .")
+		cmd := exec.Command("wsl", "-d", distro, "-e", "bash", "-lic", "code '"+strings.ReplaceAll(wslPath, "'", "'\\''")+"'")
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		return cmd.Start()
 	}
 	cmd := exec.Command("code", nativePath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	return cmd.Start()
+}
+
+func (a *App) OpenInVSCodeDiff(projectPath, hash, filePath string) error {
+	nativePath := filepath.FromSlash(projectPath)
+	ext := filepath.Ext(filePath)
+	if ext == "" {
+		ext = ".txt"
+	}
+	prefix := fmt.Sprintf("mgit-%s", hash[:8])
+
+	tempDir := os.TempDir()
+	oldFile := filepath.Join(tempDir, prefix+"-old"+ext)
+	newFile := filepath.Join(tempDir, prefix+"-new"+ext)
+
+	if distro, _, ok := parseWSLPath(nativePath); ok {
+		oldFile = path.Join("/tmp", prefix+"-old"+ext)
+		newFile = path.Join("/tmp", prefix+"-new"+ext)
+
+		oldContent, _ := git.GetCommitFileContent(projectPath, hash+"^", filePath)
+		newContent, _ := git.GetCommitFileContent(projectPath, hash, filePath)
+
+		writeRemote := func(path, content string) {
+			cmd := exec.Command("wsl", "-d", distro, "--", "sh", "-c", "cat > '"+strings.ReplaceAll(path, "'", "'\\''")+"'")
+			cmd.Stdin = strings.NewReader(content)
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			cmd.Run()
+		}
+		writeRemote(oldFile, oldContent)
+		writeRemote(newFile, newContent)
+
+		diffCmd := exec.Command("wsl", "-d", distro, "-e", "bash", "-lic", "code --diff '"+strings.ReplaceAll(oldFile, "'", "'\\''")+"' '"+strings.ReplaceAll(newFile, "'", "'\\''")+"'")
+		diffCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		return diffCmd.Start()
+	}
+
+	oldContent, _ := git.GetCommitFileContent(projectPath, hash+"^", filePath)
+	newContent, _ := git.GetCommitFileContent(projectPath, hash, filePath)
+
+	os.WriteFile(oldFile, []byte(oldContent), 0644)
+	os.WriteFile(newFile, []byte(newContent), 0644)
+
+	cmd := exec.Command("code", "--diff", oldFile, newFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd.Start()
 }
