@@ -569,9 +569,10 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
             content.appendChild(end);
         }
 
-        content.querySelectorAll('.commit-item > div:first-child').forEach(row => {
+        content.querySelectorAll('.commit-item').forEach(row => {
             let clickTimer = null;
             row.addEventListener('click', (e) => {
+                if (e.target.closest('.commit-files')) return;
                 e.stopPropagation();
                 const ctx = document.querySelector('.ctx-menu');
                 if (ctx) ctx.remove();
@@ -582,7 +583,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 }
                 clickTimer = setTimeout(async () => {
                     clickTimer = null;
-                    const item = row.closest('.commit-item');
+                    const item = row;
                     content.querySelectorAll('.commit-item.active').forEach(el => el.classList.remove('active'));
                     item.classList.add('active');
                     const filesDiv = item.querySelector('.commit-files');
@@ -924,6 +925,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
             s.lastSearchTerm = '';
             setHistoryMsg('');
             renderProjectCommits(s.allCommits.get(projectPaths[s.currentTabIndex]) || [], projectPaths[s.currentTabIndex]);
+            updateTabCounts(s.allCommits);
         }
     });
 
@@ -967,6 +969,7 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
                 s.searchResults = new Map();
                 s.lastSearchTerm = '';
                 renderProjectCommits(s.allCommits.get(curPath()) || [], curPath());
+                updateTabCounts(s.allCommits);
             }
 
             setTimeout(() => {
@@ -1341,7 +1344,7 @@ $('#historyPanel').addEventListener('contextmenu', (e) => {
                 ['提交人', `${detail.committer} <${detail.committerEmail}>`],
                 ['提交日期', detail.committerDate],
                 ['仓库路径', item.dataset.project],
-                ['标签', (detail.tags || []).join(', ')],
+                ...((detail.tags || []).length ? [['标签', detail.tags.join(', ')]] : []),
                 ['提交信息', detail.message],
             ];
             const parts = [
