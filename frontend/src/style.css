@@ -604,8 +604,8 @@ select.input {
 
 .commit-item {
     display: flex;
-    align-items: flex-start;
-    gap: 8px;
+    align-items: stretch;
+    gap: 6px;
     padding: 6px 8px;
     border-radius: 4px;
     cursor: pointer;
@@ -618,6 +618,19 @@ select.input {
 
 .commit-item.active {
     background: var(--commit-active-bg);
+}
+
+.commit-graph {
+    width: 28px;
+    flex-shrink: 0;
+    position: relative;
+    align-self: stretch;
+}
+.commit-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .commit-files {

@@ -539,22 +539,117 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         });
     }
 
+    const LANE_COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#34495e'];
+    const GRAPH_DOT_Y = 9;
+    const GRAPH_CURVE = 6;
+    const LANE_W = 14;
+    const GRAPH_X_OFFSET = 4;
+
+    function nearestEmpty(lanes, from) {
+        let best = -1, bestDist = Infinity;
+        for (let i = 0; i < lanes.length; i++) {
+            if (lanes[i] === null) {
+                const d = Math.abs(i - from);
+                if (d < bestDist) { bestDist = d; best = i; }
+            }
+        }
+        return best;
+    }
+
+    function computeGraph(commits) {
+        const lanes = [];
+        return commits.map(c => {
+            const hash = c.hash;
+            const parents = c.parents || [];
+            const incoming = [];
+            for (let i = 0; i < lanes.length; i++) if (lanes[i] !== null) incoming.push(i);
+            const arriving = [];
+            for (let i = 0; i < lanes.length; i++) if (lanes[i] === hash) arriving.push(i);
+            let dotCol;
+            const mergeIn = [];
+            if (arriving.length > 0) {
+                dotCol = arriving[0];
+                for (let j = 1; j < arriving.length; j++) mergeIn.push(arriving[j]);
+                for (const m of mergeIn) lanes[m] = null;
+            } else {
+                dotCol = lanes.indexOf(null);
+                if (dotCol === -1) { lanes.push(null); dotCol = lanes.length - 1; }
+            }
+            const spawnOut = [];
+            if (parents.length === 0) {
+                lanes[dotCol] = null;
+            } else {
+                lanes[dotCol] = parents[0];
+                for (let k = 1; k < parents.length; k++) {
+                    let slot = nearestEmpty(lanes, dotCol);
+                    if (slot === -1) { lanes.push(parents[k]); slot = lanes.length - 1; }
+                    else lanes[slot] = parents[k];
+                    spawnOut.push(slot);
+                }
+            }
+            const outgoing = [];
+            for (let i = 0; i < lanes.length; i++) if (lanes[i] !== null) outgoing.push(i);
+            return { dotCol, mergeIn, spawnOut, incoming, outgoing };
+        });
+    }
+
+    function renderGraphCell(row, laneX, graphW) {
+        const color = (col) => LANE_COLORS[col % LANE_COLORS.length];
+        const dotX = laneX(row.dotCol);
+        let paths = '';
+        for (const col of row.incoming) {
+            const fx = laneX(col);
+            if (row.mergeIn.includes(col)) {
+                paths += `<path d="M${fx} 0 C${fx} ${GRAPH_DOT_Y - GRAPH_CURVE} ${dotX} ${GRAPH_DOT_Y - GRAPH_CURVE} ${dotX} ${GRAPH_DOT_Y}" stroke="${color(col)}" stroke-width="2" fill="none"/>`;
+            } else {
+                paths += `<path d="M${fx} 0 L${fx} ${GRAPH_DOT_Y}" stroke="${color(col)}" stroke-width="2" fill="none"/>`;
+            }
+        }
+        for (const col of row.outgoing) {
+            const cx = laneX(col);
+            if (row.spawnOut.includes(col)) {
+                paths += `<path d="M${dotX} ${GRAPH_DOT_Y} C${dotX} ${GRAPH_DOT_Y + GRAPH_CURVE} ${cx} ${GRAPH_DOT_Y + GRAPH_CURVE} ${cx} ${GRAPH_DOT_Y + GRAPH_CURVE} L${cx} 10000" stroke="${color(col)}" stroke-width="2" fill="none"/>`;
+            } else {
+                paths += `<path d="M${cx} ${GRAPH_DOT_Y} L${cx} 10000" stroke="${color(col)}" stroke-width="2" fill="none"/>`;
+            }
+        }
+        const dot = `<circle cx="${dotX}" cy="${GRAPH_DOT_Y}" r="5" fill="${color(row.dotCol)}" style="stroke:var(--bg);stroke-width:2"/>`;
+        return `<div class="commit-graph" style="width:${graphW}px"><svg style="position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden;display:block">${paths}${dot}</svg></div>`;
+    }
+
     function renderProjectCommits(commits, projectPath) {
         const isSearch = s.isSearchMode;
         const loaded = isSearch ? isSearchAllLoaded() : isAllLoaded();
         const hasMore = !loaded && !s.loading;
 
-        content.innerHTML = commits.map(c =>
-            `<div class="commit-item" data-hash="${c.hash}" data-project="${escapeHtml(projectPath)}" style="padding:4px 8px;flex-direction:column">
-                <div style="width:100%;display:flex;align-items:center;gap:4px;font-size:12px">
-                    <span class="commit-toggle" style="flex-shrink:0;width:14px;text-align:center;color:var(--text-muted);font-size:10px">▶</span>
-                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
-                    ${(c.tags || []).map(t => `<span style="display:inline-block;padding:0 5px;margin:0 2px;font-size:10px;border-radius:3px;background:rgba(124,58,237,0.15);color:var(--primary);white-space:nowrap">${escapeHtml(t)}</span>`).join('')}
-                    <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap" title="${escapeHtml(c.dateISO)}">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
+        let graphRows = null;
+        if (!isSearch) {
+            graphRows = computeGraph(commits);
+        }
+        const laneX = (col) => GRAPH_X_OFFSET + col * LANE_W + LANE_W / 2;
+        const rowGraphW = (row) => {
+            if (!row) return 20;
+            let m = row.dotCol + 1;
+            for (const c of row.incoming) if (c + 1 > m) m = c + 1;
+            for (const c of row.outgoing) if (c + 1 > m) m = c + 1;
+            return Math.max(20, GRAPH_X_OFFSET + (m - 1) * LANE_W + LANE_W / 2 + 6);
+        };
+
+        content.innerHTML = commits.map((c, i) => {
+            const graph = isSearch ? '' : renderGraphCell(graphRows[i], laneX, rowGraphW(graphRows[i]));
+            return `<div class="commit-item" data-hash="${c.hash}" data-project="${escapeHtml(projectPath)}" style="padding:4px 8px 4px 4px">
+                ${graph}
+                <div class="commit-body">
+                    <div style="width:100%;display:flex;align-items:center;gap:4px;font-size:12px">
+                        <span class="commit-toggle" style="flex-shrink:0;width:14px;text-align:center;color:var(--text-muted);font-size:10px">▶</span>
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)" title="${escapeHtml(c.message)}">${escapeHtml(c.message)}</span>
+                        ${(c.tags || []).map(t => `<span style="display:inline-block;padding:0 5px;margin:0 2px;font-size:10px;border-radius:3px;background:rgba(124,58,237,0.15);color:var(--primary);white-space:nowrap">${escapeHtml(t)}</span>`).join('')}
+                        <span style="flex-shrink:0;color:var(--text-muted);white-space:nowrap" title="${escapeHtml(c.dateISO)}">${escapeHtml(c.author)} &middot; ${escapeHtml(c.date)}</span>
+                    </div>
+                    <div class="commit-files" style="display:none;padding:2px 0 2px 18px;width:100%;font-size:11px;font-family:var(--font-mono);line-height:1.8"></div>
                 </div>
-                <div class="commit-files" style="display:none;padding:2px 0 2px 18px;width:100%;font-size:11px;font-family:var(--font-mono);line-height:1.8"></div>
-            </div>`
-        ).join('') || '<div style="padding:8px;color:var(--text-muted);font-size:12px">没有提交记录</div>';
+            </div>`;
+        }).join('') || '<div style="padding:8px;color:var(--text-muted);font-size:12px">没有提交记录</div>';
 
         if (hasMore) {
             const indicator = document.createElement('div');

@@ -69,6 +69,7 @@ type CommitInfo struct {
 	Timestamp int64    `json:"-"`
 	Tags      []string `json:"tags,omitempty"`
 	DateISO   string   `json:"dateISO,omitempty"`
+	Parents   []string `json:"parents,omitempty"`
 }
 
 type CommitDetail struct {
@@ -440,7 +441,7 @@ func Fetch(ctx context.Context, cwd string) error {
 }
 
 func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
-	cmd := gitCmd(cwd, "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--date=format:%Y-%m-%d %H:%M:%S", "--format=%H%x00%an%x00%ar%x00%s%x00%D%x00%ad")
+	cmd := gitCmd(cwd, "log", ref, fmt.Sprintf("--skip=%d", skip), fmt.Sprintf("-n%d", n), "--date=format:%Y-%m-%d %H:%M:%S", "--format=%H%x00%an%x00%ar%x00%s%x00%D%x00%ad%x00%P")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -451,7 +452,7 @@ func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x00", 6)
+		parts := strings.SplitN(line, "\x00", 7)
 		if len(parts) >= 4 {
 			c := CommitInfo{Hash: parts[0], Author: parts[1], Date: parts[2], Message: parts[3]}
 			if len(parts) >= 5 {
@@ -459,6 +460,9 @@ func Log(cwd, ref string, n, skip int) ([]CommitInfo, error) {
 			}
 			if len(parts) >= 6 {
 				c.DateISO = parts[5]
+			}
+			if len(parts) >= 7 {
+				c.Parents = strings.Fields(parts[6])
 			}
 			commits = append(commits, c)
 		}
