@@ -918,7 +918,17 @@ func parseWSLPath(nativePath string) (distro, wslPath string, ok bool) {
 func (a *App) OpenInTerminal(path string) error {
 	dir := filepath.FromSlash(path)
 	if distro, wslPath, ok := parseWSLPath(dir); ok {
-		cmd := exec.Command("cmd", "/C", "start", "wsl", "-d", distro, "-e", "bash", "-lic", "cd '"+strings.ReplaceAll(wslPath, "'", "'\\''")+"' && exec bash")
+		// 用 PowerShell 启动 wsl，继承 PowerShell 的终端样式（字体/背景色/oh-my-posh）
+		for _, bin := range []string{"pwsh", "powershell"} {
+			if _, err := exec.LookPath(bin); err == nil {
+				quoted := strings.ReplaceAll(wslPath, "'", "''")
+				cmd := exec.Command("cmd", "/C", "start", "", bin, "-NoExit", "-Command", "wsl -d "+distro+" --cd '"+quoted+"'")
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+				return cmd.Start()
+			}
+		}
+		// 兜底：直接用 cmd
+		cmd := exec.Command("cmd", "/C", "start", "wsl", "-d", distro, "--cd", wslPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		return cmd.Start()
 	}
