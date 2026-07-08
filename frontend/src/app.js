@@ -868,41 +868,6 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     });
     }
 
-    function renderStats() {
-        const commits = s.allCommits.get(curPath()) || [];
-        const stats = {};
-        let totalAdded = 0;
-        let totalDeleted = 0;
-
-        commits.forEach(c => {
-            if (!stats[c.author]) {
-                stats[c.author] = { author: c.author, count: 0, added: 0, deleted: 0 };
-            }
-            stats[c.author].count++;
-        });
-
-        const sorted = Object.values(stats).sort((a, b) => b.count - a.count);
-        const totalCommits = sorted.reduce((s, a) => s + a.count, 0);
-
-        content.innerHTML =
-            '<div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:4px">📊 提交统计</div>' +
-            '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-            '<thead><tr style="border-bottom:1px solid var(--border);color:var(--text-muted)">' +
-            '<th style="text-align:left;padding:6px 8px;font-weight:600">作者</th>' +
-            '<th style="text-align:right;padding:6px 8px;font-weight:600">提交数</th>' +
-            '<th style="text-align:right;padding:6px 8px;font-weight:600">占比</th>' +
-            '</tr></thead><tbody>' +
-            sorted.map(a => 
-                `<tr style="border-bottom:1px solid var(--border)">
-                    <td style="padding:6px 8px;color:var(--text)">${escapeHtml(a.author)}</td>
-                    <td style="padding:6px 8px;text-align:right;color:var(--text)">${a.count}</td>
-                    <td style="padding:6px 8px;text-align:right;color:var(--text-muted)">${(a.count / totalCommits * 100).toFixed(1)}%</td>
-                </tr>`
-            ).join('') +
-            '</tbody></table>' +
-            `<div style="padding:6px 8px;margin-top:4px;font-size:12px;color:var(--text-muted);text-align:right">合计: ${totalCommits} 条提交</div>`;
-    }
-
     async function loadMore() {
         if (s.loading) return;
         const cp = () => projectPaths[s.currentTabIndex];
@@ -973,7 +938,6 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     }
 
     content.addEventListener('scroll', () => {
-        if (tabs.querySelector('.tab-active[data-mode="stats"]')) return;
         if (content.scrollTop + content.clientHeight >= content.scrollHeight - 150) {
             loadMore();
         }
@@ -1032,17 +996,10 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
     tabs.innerHTML = projectPaths.map((path, i) => {
         const pc = firstPage.find(p => p.project_path === path);
         return `<button type="button" class="tab ${i === 0 ? 'tab-active' : ''}" data-project-index="${i}">${escapeHtml(pc ? pc.project_name : path.split('/').pop())} (${(s.allCommits.get(path) || []).length})</button>`;
-    }).join('') + '<button type="button" class="tab" data-mode="stats">📊 统计</button>';
+    }).join('');
 
     tabs.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
-            if (tab.dataset.mode === 'stats') {
-                savedScrollTops[curPath()] = content.scrollTop;
-                tabs.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
-                tab.classList.add('tab-active');
-                renderStats();
-                return;
-            }
             ++searchGen;
             savedScrollTops[curPath()] = content.scrollTop;
 
