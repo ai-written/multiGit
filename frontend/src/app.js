@@ -520,11 +520,13 @@ function showHistoryPanel(projectPaths, branch, pageSize, searchPageSize, firstP
         s.allCommits.set(pc.project_path, [...pc.commits]);
     });
     firstPage.forEach(pc => {
-        const isLast = pc.commits.length < pageSize;
-        if (isLast) {
+        if (pc.commits.length < pageSize) {
             projectAllLoaded[normalizePath(pc.project_path)] = true;
         }
     });
+
+    window._historyState = s;
+    window._historyCurPath = curPath;
 
     function updateTabCounts(primarySource) {
         tabs.querySelectorAll('.tab').forEach(tab => {
@@ -1397,6 +1399,60 @@ $('#btnBranchCompare').addEventListener('click', async () => {
         document.body.appendChild(overlay);
     } catch (e) { logError('获取分支列表失败: ' + e); }
 });
+
+$('#btnStats').addEventListener('click', async () => {
+    const panels = $('#historyPanel');
+    if (panels.style.display === 'none') return;
+    const state = window._historyState;
+    if (!state) {
+        logError('没有提交数据，请先获取提交');
+        return;
+    }
+    const path = window._historyCurPath ? window._historyCurPath() : '';
+    const commits = state.allCommits.get(path) || [];
+    if (commits.length === 0) {
+        logError('没有提交数据，请先获取提交');
+        return;
+    }
+    const stats = {};
+    commits.forEach(c => {
+        if (!stats[c.author]) stats[c.author] = { author: c.author, count: 0 };
+        stats[c.author].count++;
+    });
+    const sorted = Object.values(stats).sort((a, b) => b.count - a.count);
+    const totalCommits = sorted.reduce((s, a) => s + a.count, 0);
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:200';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:400px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
+    box.innerHTML =
+        '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text)">📊 提交统计</div>' +
+        '<div style="padding:12px 18px">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+        '<thead><tr style="border-bottom:1px solid var(--border);color:var(--text-muted)">' +
+        '<th style="text-align:left;padding:6px 8px;font-weight:600">作者</th>' +
+        '<th style="text-align:right;padding:6px 8px;font-weight:600">提交数</th>' +
+        '<th style="text-align:right;padding:6px 8px;font-weight:600">占比</th>' +
+        '</tr></thead><tbody>' +
+        sorted.map(a =>
+            `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:6px 8px;color:var(--text)">${escapeHtml(a.author)}</td>
+                <td style="padding:6px 8px;text-align:right;color:var(--text)">${a.count}</td>
+                <td style="padding:6px 8px;text-align:right;color:var(--text-muted)">${(a.count / totalCommits * 100).toFixed(1)}%</td>
+            </tr>`
+        ).join('') +
+        '</tbody></table>' +
+        `<div style="padding:6px 8px;margin-top:4px;font-size:12px;color:var(--text-muted);text-align:right">合计: ${totalCommits} 条提交</div>` +
+        '</div>' +
+        '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">' +
+        '<button class="btn btn-secondary" style="padding:6px 18px;font-size:12px">关闭</button></div>';
+    box.querySelector('.btn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+});
+
 $('#historyPanel').addEventListener('contextmenu', (e) => {
     const item = e.target.closest('.commit-item');
     if (!item || !item.dataset.hash) return;
