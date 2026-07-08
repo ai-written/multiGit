@@ -1308,10 +1308,10 @@ $('#btnBranchCompare').addEventListener('click', async () => {
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:200';
         const box = document.createElement('div');
-        box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:480px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
+        box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:480px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
         box.innerHTML =
-            '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text)">🔀 分支对比</div>' +
-            '<div style="padding:14px 18px">' +
+            '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text);flex-shrink:0">🔀 分支对比</div>' +
+            '<div style="padding:14px 18px;flex:1;min-height:0;overflow-y:auto">' +
             '<div style="display:flex;gap:8px;margin-bottom:12px">' +
             '<select id="bcBranchA" class="input">' + branches.map(b => `<option value="${b}" ${b === branch ? 'selected' : ''}>${b}</option>`).join('') + '</select>' +
             '<span style="line-height:32px;color:var(--text-muted)">vs</span>' +
@@ -1320,7 +1320,7 @@ $('#btnBranchCompare').addEventListener('click', async () => {
             '<button class="btn btn-primary" id="bcDoCompare" style="width:100%">对比</button>' +
             '<div id="bcResult" style="margin-top:12px"></div>' +
             '</div>' +
-            '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">' +
+            '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0">' +
             '<button class="btn btn-secondary" style="padding:6px 18px;font-size:12px">关闭</button></div>';
         box.querySelector('#bcDoCompare').addEventListener('click', async () => {
             const a = box.querySelector('#bcBranchA').value;
@@ -1382,10 +1382,10 @@ $('#btnStats').addEventListener('click', async () => {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:200';
     const box = document.createElement('div');
-    box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:400px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
+    box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);width:400px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.5)';
     box.innerHTML =
-        '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text)">📊 提交统计</div>' +
-        '<div style="padding:12px 18px">' +
+        '<div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;color:var(--text);flex-shrink:0">📊 提交统计</div>' +
+        '<div style="flex:1;min-height:0;overflow-y:auto;padding:12px 18px">' +
         '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
         '<thead><tr style="border-bottom:1px solid var(--border);color:var(--text-muted)">' +
         '<th style="text-align:left;padding:6px 8px;font-weight:600">作者</th>' +
@@ -1402,7 +1402,7 @@ $('#btnStats').addEventListener('click', async () => {
         '</tbody></table>' +
         `<div style="padding:6px 8px;margin-top:4px;font-size:12px;color:var(--text-muted);text-align:right">合计: ${totalCommits} 条提交</div>` +
         '</div>' +
-        '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">' +
+        '<div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0">' +
         '<button class="btn btn-secondary" style="padding:6px 18px;font-size:12px">关闭</button></div>';
     box.querySelector('.btn').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
