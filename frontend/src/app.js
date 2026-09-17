@@ -170,19 +170,40 @@ function renderPackageList() {
     });
 }
 
+// 把界面上已渲染的版本号输入回写到内存缓存
+function snapshotPackageVersions() {
+    $$('.pkg-version').forEach(input => {
+        versionInputCache.set(input.dataset.pkg, input.value.trim());
+    });
+}
+
+// 记住本次输入的版本号并落盘（不依赖执行结果）
+async function persistPackageVersions() {
+    snapshotPackageVersions();
+    const cache = {};
+    versionInputCache.forEach((v, k) => {
+        if (v) cache[k] = v;
+    });
+    config.packageVersionCache = cache;
+    try {
+        await SaveConfig(config);
+    } catch (e) {
+        logError('保存版本号失败: ' + e);
+    }
+}
+
 function onPackageChange() {
     const container = $('#packageVersions');
     const checked = $$('.pkg-checkbox:checked');
+
+    // 先快照当前输入再重渲染，取消最后一个勾选时也不能丢
+    snapshotPackageVersions();
 
     if (checked.length === 0) {
         container.style.display = 'none';
         container.innerHTML = '';
         return;
     }
-
-    $$('.pkg-version').forEach(input => {
-        versionInputCache.set(input.dataset.pkg, input.value);
-    });
 
     container.style.display = 'flex';
     container.innerHTML = '<label class="form-label">输入版本号</label>' +
@@ -200,6 +221,10 @@ function onPackageChange() {
         } else if (pkgVersions[input.dataset.pkg]) {
             input.value = pkgVersions[input.dataset.pkg];
         }
+        // 实时同步用户输入，避免只靠勾选变化才快照
+        input.addEventListener('input', () => {
+            versionInputCache.set(input.dataset.pkg, input.value.trim());
+        });
     });
 }
 
@@ -265,6 +290,8 @@ async function onSubmit(e) {
             hasEmptyVersion = true;
             return;
         }
+        // 关键：把本次输入的版本号写回缓存，否则保存的仍是旧值
+        versionInputCache.set(cb.value, version);
         packages.push(`${cb.value}@${version}`);
     });
 
@@ -280,12 +307,12 @@ async function onSubmit(e) {
     btnRun.disabled = true;
     btnRun.textContent = '更新中...';
 
+    // 先记住版本号再执行，避免校验/执行失败时丢失输入
+    await persistPackageVersions();
+
     try {
         const result = await UpdatePackage(selectedProjects, packages, branch);
-        if (result.ok) {
-            config.packageVersionCache = Object.fromEntries(versionInputCache);
-            await SaveConfig(config);
-        } else {
+        if (!result.ok) {
             logError(result.message);
         }
     } catch (e) {
@@ -301,7 +328,9 @@ function onReset() {
     $('#packageVersions').style.display = 'none';
     $('#packageVersions').innerHTML = '';
     terminal.innerHTML = '<span class="terminal-prompt">$ _</span>';
+    // 回到上次保存的版本号，而不是清空（避免把已记住的值永久丢掉）
     versionInputCache.clear();
+    Object.entries(config.packageVersionCache || {}).forEach(([k, v]) => versionInputCache.set(k, v));
 }
 
 async function onFetchCommits() {
@@ -1264,6 +1293,11 @@ async function saveConfig() {
     });
     config.packages = parsedPkgs;
     config.packageVersions = parsedVersions;
+    // 设置里的默认版本号同步进内存缓存，否则会被旧缓存压制而看不到效果
+    Object.entries(parsedVersions).forEach(([k, v]) => versionInputCache.set(k, v));
+    Array.from(versionInputCache.keys()).forEach(k => {
+        if (!parsedPkgs.includes(k)) versionInputCache.delete(k);
+    });
     config.autoBumpProjects = $('#cfgAutoBump').value.split(',').map(s => s.trim()).filter(Boolean);
     config.commitCount = parseInt($('#cfgCommitCount').value) || 3;
     config.historyCommitCount = parseInt($('#cfgHistoryCount').value) || 50;
@@ -1271,6 +1305,9 @@ async function saveConfig() {
     try {
         await SaveConfig(config);
         applyConfigToUI();
+        // 常用包列表已重建（勾选被清空），直接收起版本号输入区，避免残留旧输入
+        $('#packageVersions').style.display = 'none';
+        $('#packageVersions').innerHTML = '';
         closeConfig();
         log('配置已保存');
     } catch (e) {
